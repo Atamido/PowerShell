@@ -15,7 +15,7 @@ $Results = Get-Content .\Computers2.txt |
 Invoke-Parallel -RunspaceTimeout 150 -Throttle 250 -ImportModules -ScriptBlock {
     $ComputerName = $_
     Try {
-        (New-Object System.Net.Sockets.TcpClient).connect("$($ComputerName).amer.homedepot.com",5986)
+        (New-Object System.Net.Sockets.TcpClient).connect("$($ComputerName).domainname.com",5986)
         Return New-Object –TypeName PSObject -Property @{'ComputerName'=$ComputerName;'TcpTestSucceeded'=$true}
     }
     Catch {

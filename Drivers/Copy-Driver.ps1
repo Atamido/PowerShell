@@ -9,7 +9,7 @@ If (!(Test-Path -Path $DriverFolder -PathType Container))
 {
     New-Item -Path $DriverRoot -Name $DateTime -ItemType Directory -Force | Out-Null
 }
-If (!(Test-Path -Path "$($DriverRoot)\Copy-Drivers.ps1" -PathType Leaf))
+If (!(Test-Path -Path "$($DriverRoot)\Copy-Driver.ps1" -PathType Leaf))
 {
     Copy-Item -Path $PSCommandPath -Destination $DriverRoot -Force
 }
@@ -20,14 +20,16 @@ Write-Host "Working directory: $($DriverFolder)"
 gwmi win32_computersystem | Format-List | Out-File -FilePath "$($DriverFolder)\DriverCollectionLog.txt" -Append
 
 #  Get list of drivers being used for attached hardware
-$PnPSignedDrivers = @(Get-WmiObject Win32_PnPSignedDriver)
+#  Exclude the Dell Command Monitor driver 'dcdbas'
+#  Exclude the Cisco VPN driver 'VPNVA'
+$PnPSignedDrivers = @(Get-WmiObject Win32_PnPSignedDriver | Where-Object {($_.HardWareID -notlike '*dcdbas') -and ($_.HardWareID -ne 'VPNVA')})
 $OEMPnPSignedDrivers = @($PnPSignedDrivers | Where-Object {$_.InfName -like 'oem*'})
 [string[]]$OEMDrivers = $OEMPnPSignedDrivers | Select-Object -ExpandProperty InfName | Sort-Object -Unique
 Write-Host "$($OEMDrivers.Count) OEM drivers in use by $($OEMPnPSignedDrivers.Count) devices"
 "$($OEMDrivers.Count) OEM drivers in use by $($OEMPnPSignedDrivers.Count) devices" | Out-File -FilePath "$($DriverFolder)\DriverCollectionLog.txt" -Append
 
 #  Get list of drivers installed on the system, which includes where the driver files are located
-$WindowsDrivers = @(Get-WindowsDriver -Online | Where-Object {$_.Driver -like 'oem*'})
+$WindowsDrivers = @(Get-WindowsDriver -Online | Where-Object {($_.Driver -like 'oem*') -and ($_.InfName -notlike 'dcdbas*') -and ($_.InfName -notlike 'vpnva*')})
 $OriginalFileNames = @($WindowsDrivers | Where-Object {$OEMDrivers -contains $_.Driver} | Select-Object -ExpandProperty OriginalFileName | Sort-Object -Unique)
 Write-Host "$($WindowsDrivers.Count) OEM drivers installed"
 "$($WindowsDrivers.Count) OEM drivers installed" | Out-File -FilePath "$($DriverFolder)\DriverCollectionLog.txt" -Append
@@ -55,9 +57,8 @@ $OEMHash = @{}
 $WindowsDrivers | ForEach {$OEMHash[$_.Driver] = $_}
 $OEMPnPSignedDrivers | Sort-Object -Property devicename | ForEach {Add-Member -InputObject $_ -MemberType NoteProperty -Name 'OriginalFileName' -Value ($OEMHash[$_.InfName].OriginalFileName -replace '(.*\\)(.*?)(\\.*)','$2')}
 $OEMPnPSignedDrivers | Sort-Object -Property devicename | ForEach {Add-Member -InputObject $_ -MemberType NoteProperty -Name 'Date' -Value ($_.DriverDate.Substring(0,8))}
-$OEMPnPSignedDrivers | Sort-Object -Property devicename | Format-Table -Property OriginalFileName,DeviceName,DriverVersion,Date,DriverProviderName,InfName -AutoSize | Out-File -FilePath "$($DriverFolder)\DriverCollectionLog.txt" -Append
+$OEMPnPSignedDrivers | Sort-Object -Property devicename | Format-Table  -Property OriginalFileName,DeviceName,DriverVersion,Date,DriverProviderName,InfName,HardwareID -AutoSize | Out-File -FilePath "$($DriverFolder)\DriverCollectionLog.txt" -Append
+$OEMPnPSignedDrivers | Sort-Object -Property devicename | Select-Object -Property OriginalFileName,DeviceName,DriverVersion,Date,DriverProviderName,InfName,HardwareID | Export-Csv -Path "$($DriverFolder)\DriverCollectionLog.csv" -NoTypeInformation
 
 #  We don't want these files in the Driver Packages as they're extras, so delete them now
-Remove-Item -Path $DriverRoot -Include *.pnf -Recurse
-
-
+Get-ChildItem -Path $DriverRoot -Recurse | Where-Object {$_.Extension -eq '.pnf'} | Remove-Item -Force
