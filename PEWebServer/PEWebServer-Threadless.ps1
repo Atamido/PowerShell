@@ -34,9 +34,11 @@
             /process
             /process/{name}
             /run
+            /screen
             /test
             /upload
             /vnc
+            /window
             
     .Parameter ShutdownCommand
         [String]. A REGEX string that can be passed to the server via the body of a REST POST request that will cause the web server to shutdown
@@ -1182,6 +1184,100 @@ function Send-File {
 }
 
 
+
+#  Takes a screenshot and returns an image over the network stream.
+#  If the Window switch it specified, a screenshot of only the active window is returned.
+#  Stream bytes are from a TCP connection that are retrieved via:
+#  [System.Net.Sockets.TcpListener]->.AcceptTcpClient()->.GetStream()
+#  as
+#  [System.Net.Sockets.NetworkStream]->.Read()
+function Send-Screen {
+    [cmdletbinding()]
+    Param (
+        [parameter(Mandatory=$True)]
+        [System.Net.Sockets.NetworkStream]$Stream,
+        [parameter()]
+        [String]$CodecType = 'PNG',
+        [parameter()]
+        [Drawing.Imaging.EncoderParameter]$EncoderParameter = $null,
+        [parameter()]
+        [Switch]$Window
+    )
+
+
+    $Bounds = [System.Windows.Forms.Screen]::AllScreens | Where-Object {$_.Primary -eq $true} | Select -ExpandProperty Bounds
+    
+    if ($Window) {
+        $MethodDefinition = @'
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hwnd, out RECT lpRect);
+
+        public struct RECT
+        {
+             public int Left;        // x position of upper-left corner
+             public int Top;         // y position of upper-left corner
+             public int Right;       // x position of lower-right corner
+             public int Bottom;      // y position of lower-right corner
+        }
+'@
+
+        if (-not ([System.Management.Automation.PSTypeName]'User32.ShowHideWindow2').Type) {
+            Add-Type -MemberDefinition $MethodDefinition -Name 'ShowHideWindow2' -Namespace 'User32' | Out-Null
+        }
+
+        $Handle = [User32.ShowHideWindow2]::GetForegroundWindow()
+        $Rectangle = New-Object User32.ShowHideWindow2+RECT
+
+        $WindowRect = [User32.ShowHideWindow2]::GetWindowRect($Handle,[ref]$Rectangle)
+
+        $Location = $Bounds.Location
+        $Location.X = $Rectangle.Left
+        $Location.Y = $Rectangle.Top
+        $Bounds.Location = $Location
+        $Bounds.Width = $Rectangle.Right - $Rectangle.Left
+        $Bounds.Height = $Rectangle.Bottom - $Rectangle.Top
+    }
+
+    $Bitmap = New-Object System.Drawing.Bitmap $Bounds.Width, $Bounds.Height
+    $Screenshot = [System.Drawing.Graphics]::FromImage($Bitmap)
+    $Screenshot.CopyFromScreen($Bounds.Location, [Drawing.Point]::Empty, $Bounds.size)
+
+    $Codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatDescription -eq $CodecType }
+
+    $MemoryStream = New-Object System.IO.MemoryStream
+    if ($EncoderParameter -eq $null) {
+        $Bitmap.Save($MemoryStream, $Codec.FormatDescription)
+    } else {
+        $Bitmap.Save($MemoryStream, $Codec.FormatDescription, $EncoderParameter)
+    }
+
+    $Headers = @{
+        'Content-Transfer-Encoding' = $Codec.MimeType
+        'Content-Description' = 'File Transfer'
+        'Cache-Control' = 'no-cache, no-store, must-revalidate'
+        'Pragma' = 'no-cache'
+        'Expires' = '0'
+    }
+    [Long]$StreamLength = $MemoryStream.Length
+    $MemoryStream.Position = 0
+    Write-Verbose "Send-Screen: Sending screenshot of size: $($StreamLength) bytes"
+    $HTTPResponseBytes = New-HTTPResponseBytes -Headers $Headers -ContentLength64 $StreamLength
+    $Stream.Write($HTTPResponseBytes,0,$HTTPResponseBytes.length)
+    Write-Verbose "Send-Screen: Copying file stream"
+    $MemoryStream.CopyTo($Stream)
+    $MemoryStream.Flush()
+    $MemoryStream.Dispose()
+
+    Remove-Variable HTTPResponseBytes
+    [System.GC]::Collect()
+
+    return
+}
+
+
 #  Sends a simple/small favicon.ico when one is requested, specifying to cache it
 #  The .ico is embedded in the script and there are no external dependencies
 function Send-Favicon {
@@ -1291,6 +1387,13 @@ function Update-WebSchema {
                             $out
                 }
             },@{
+                Path   = '/screen'
+                method = 'get'
+                Script = {
+                            Send-Screen -Stream $Parameters.Stream
+                }
+                DefaultReply = $false
+            },@{
                 Path   = '/test'
                 Method = 'get'
                 Script = {
@@ -1344,6 +1447,13 @@ function Update-WebSchema {
 
                             Write-Output $ReturnObj | ConvertTo-Json -Depth 1
                 }
+            },@{
+                Path   = '/window'
+                method = 'get'
+                Script = {
+                            Send-Screen -Stream $Parameters.Stream -Window
+                }
+                DefaultReply = $false
             })
     
     if ($IncludeDefaultSchema) {
