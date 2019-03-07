@@ -60,9 +60,13 @@ function Rename-TVEpisode {
             }
             if ($Found.count -eq 1) {
                 $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].episodeName -replace '[\/:*?"<>|]','').mkv"
-                Write-Host "Renaming '$($FileName)' to '$($NewName)'"
-                if ($Rename) {
-                    Rename-Item $($FileName) -NewName $NewName
+                if ($FileName -eq $NewName) {
+                    Write-Host "Skipping correctly named '$($FileName)'"
+                } else {
+                    Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                    if ($Rename) {
+                        Rename-Item $($FileName) -NewName $NewName
+                    }
                 }
             }
 
@@ -78,9 +82,13 @@ function Rename-TVEpisode {
                     }
                     if ($Found.count -eq 1) {
                         $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].episodeName -replace ':','-' -replace '[\/:*?"<>|]','').mkv"
-                        Write-Host "Renaming '$($FileName)' to '$($NewName)'"
-                        if ($Rename) {
-                            Rename-Item $($FileName) -NewName $NewName
+                        if ($FileName -eq $NewName) {
+                            Write-Host "Skipping correctly named '$($FileName)'"
+                        } else {
+                            Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                            if ($Rename) {
+                                Rename-Item $($FileName) -NewName $NewName
+                            }
                         }
                         break
                     }
