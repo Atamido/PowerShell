@@ -28,6 +28,10 @@ function Rename-TVEpisode {
         $Page++
     }
 
+    #  Remove characters invalid for a Windows file name
+    $null = $Episodes | ForEach-Object {$null = $_ | Add-Member -MemberType NoteProperty -Name 'EpisodeNameTrim' -Value (($_.episodeName -replace '[\/:*?"<>|]','').Trim())}
+    $null = $Episodes | ForEach-Object {$null = $_ | Add-Member -MemberType NoteProperty -Name 'EpisodeNameTrimExtra' -Value (($_.EpisodeNameTrim -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim())}
+
     Write-Host "Found $($Episodes.Count) episodes"
 
     $Files = @(Get-ChildItem *.mkv | Where {$_.Name -like "$($FileStart)*"} | sort Name)
@@ -38,6 +42,21 @@ function Rename-TVEpisode {
         $FileName = $File.Name
         [String[]]$Titles = @()
 
+        if ($Name -match "^$($FileStart) - s([0-9]{1,2})e([0-9]{1,2})`$") {
+            $Season = [Int]($Matches[1])
+            $EpisodeNum = [Int]($Matches[2])
+            $Found = $null
+            $Found = @($Episodes | Where-Object {$_.airedSeason -eq $Season -and $_.airedEpisodeNumber -eq $EpisodeNum})
+            if ($Found) {
+                $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].EpisodeNameTrim).mkv"
+                Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                if ($Rename) {
+                    Rename-Item $($FileName) -NewName $NewName
+                }
+                continue
+            }
+        }
+
         if ($Name -match "^$($FileStart) - s[0-9]{1,2}e[0-9]{1,2} - (.*)`$") {
             $Titles += $Matches[1]
         } else {
@@ -47,14 +66,10 @@ function Rename-TVEpisode {
 
         $TitleNum = 1
         foreach ($Title in $Titles) {
-            $File = $Files[$i]
-            $Name = $File.BaseName
-
             $Found = @()
+            $TitleExtra = ($Title -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim()
             foreach ($Episode in $Episodes) {
-                #  Remove characters invalid for a Windows file name
-                $EpisodeName = $Episode.episodeName -replace '[\/:*?"<>|]',''
-                if ($EpisodeName -eq $Title) {
+                if ($EpisodeName.EpisodeNameTrim -eq $Title -or $EpisodeName.EpisodeNameTrimExtra -eq $TitleExtra) {
                     $Found += $Episode
                 }
             }
@@ -76,7 +91,7 @@ function Rename-TVEpisode {
                 foreach ($Word in $TitleWords) {
                     $Found = @()
                     foreach ($Episode in $Episodes) {
-                        if (($Episode.episodeName -replace '[\/:*?"<>|]','') -match "(^$Word )|( $Word`$)|( $Word )|(^$Word`$)") {
+                        if (($Episode.EpisodeNameTrim) -match "(^$Word )|( $Word`$)|( $Word )|(^$Word`$)") {
                             $Found += $Episode
                         }
                     }
