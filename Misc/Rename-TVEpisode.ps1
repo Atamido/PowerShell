@@ -31,6 +31,9 @@ function Rename-TVEpisode {
     #  Remove characters invalid for a Windows file name
     $null = $Episodes | ForEach-Object {$null = $_ | Add-Member -MemberType NoteProperty -Name 'EpisodeNameTrim' -Value (($_.episodeName -replace '[\/:*?"<>|]','').Trim())}
     $null = $Episodes | ForEach-Object {$null = $_ | Add-Member -MemberType NoteProperty -Name 'EpisodeNameTrimExtra' -Value (($_.EpisodeNameTrim -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim())}
+    $null = $Episodes | ForEach-Object {$null = $_ | Add-Member -MemberType NoteProperty -Name 'FileBaseName' -Value ("$($SeriesName) - S$("{0:00}" -f $_.airedSeason)E$("{0:00}" -f $_.airedEpisodeNumber) - $(($_.episodeName -replace ':','-' -replace '[\/:*?"<>|]','').Trim())")}
+    
+    $Episodes = $Episodes | Sort-Object -Property EpisodeName
 
     Write-Host "Found $($Episodes.Count) episodes"
 
@@ -39,6 +42,7 @@ function Rename-TVEpisode {
     for ($i = 0; $i -lt $Files.Count; $i++) {
         $File = $Files[$i]
         $Name = $File.BaseName
+        $Extension = $File.Extension
         $FileName = $File.Name
         [String[]]$Titles = @()
 
@@ -48,8 +52,8 @@ function Rename-TVEpisode {
             $Found = $null
             $Found = @($Episodes | Where-Object {$_.airedSeason -eq $Season -and $_.airedEpisodeNumber -eq $EpisodeNum})
             if ($Found) {
-                $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].EpisodeNameTrim).mkv"
-                Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                $NewName = "$($Found[0].FileBaseName)$($Extension)"
+                Write-Host "Renaming method 1: '$($FileName)' to '$($NewName)'"
                 if ($Rename) {
                     Rename-Item $($FileName) -NewName $NewName
                 }
@@ -68,17 +72,22 @@ function Rename-TVEpisode {
         foreach ($Title in $Titles) {
             $Found = @()
             $TitleExtra = ($Title -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim()
+            Write-Verbose "TitleExtra:           $($TitleExtra)"
             foreach ($Episode in $Episodes) {
-                if ($EpisodeName.EpisodeNameTrim -eq $Title -or $EpisodeName.EpisodeNameTrimExtra -eq $TitleExtra) {
+                Write-Verbose "EpisodeName:          $($Episode.EpisodeName)"
+                Write-Verbose "EpisodeNameTrim:      $($Episode.EpisodeNameTrim)"
+                Write-Verbose "EpisodeNameTrimExtra: $($Episode.EpisodeNameTrimExtra)"
+                if ($Episode.EpisodeNameTrim -eq $Title -or $Episode.EpisodeNameTrimExtra -eq $TitleExtra) {
                     $Found += $Episode
+                    Write-Verbose "Found episode $($Episode.EpisodeNameTrim)"
                 }
             }
             if ($Found.count -eq 1) {
-                $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].episodeName -replace '[\/:*?"<>|]','').mkv"
+                $NewName = "$($Found[0].FileBaseName)$($Extension)"
                 if ($FileName -eq $NewName) {
                     Write-Host "Skipping correctly named '$($FileName)'"
                 } else {
-                    Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                    Write-Host "Renaming method 2: '$($FileName)' to '$($NewName)'"
                     if ($Rename) {
                         Rename-Item $($FileName) -NewName $NewName
                     }
@@ -96,11 +105,11 @@ function Rename-TVEpisode {
                         }
                     }
                     if ($Found.count -eq 1) {
-                        $NewName = "$($SeriesName) - S$("{0:00}" -f $Found[0].airedSeason)E$("{0:00}" -f $Found[0].airedEpisodeNumber) - $($Found[0].episodeName -replace ':','-' -replace '[\/:*?"<>|]','').mkv"
+                        $NewName = "$($Found[0].FileBaseName)$($Extension)"
                         if ($FileName -eq $NewName) {
                             Write-Host "Skipping correctly named '$($FileName)'"
                         } else {
-                            Write-Host "Renaming '$($FileName)' to '$($NewName)'"
+                            Write-Host "Renaming method 3:'$($FileName)' to '$($NewName)'"
                             if ($Rename) {
                                 Rename-Item $($FileName) -NewName $NewName
                             }
