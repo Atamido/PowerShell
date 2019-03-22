@@ -92,9 +92,13 @@ function Rename-TVEpisode {
                         Rename-Item $($FileName) -NewName $NewName
                     }
                 }
-            }
-
-            if ($Found.count -ne 1) {
+            } elseif ($Found.count -gt 1) {
+                Write-Warning "Matched multiple episodes for '$($FileName)'"
+                foreach ($F in $Found) {
+                    Write-Warning "Matched: $($F.FileBaseName)"
+                }
+                break
+            } else {
                 [String[]]$TitleWords = @()
                 $TitleWords += $Title -split ' ' | where {$_ -ne '-'}
                 foreach ($Word in $TitleWords) {
