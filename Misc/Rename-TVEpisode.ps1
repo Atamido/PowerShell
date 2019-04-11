@@ -10,10 +10,35 @@ function Rename-TVEpisode {
         [String]$Token,
         [parameter(Mandatory=$true)]
         [Int]$SeriesID,
+        [parameter(ValueFromPipeline)]
+        [ValidateScript({$_ | ForEach-Object {Test-Path $_}})]
+        [String[]]$Path = @([String](Get-Location)),
+        [parameter()]
+        [Switch]$Recurse,
         [parameter()]
         [Switch]$Rename
     )
     
+    $Files = @()
+    Write-Host $Path.Count
+    foreach ($P in $Path) {
+        $Location = Get-Item -LiteralPath $P
+        if ($Location.PSIsContainer) {
+            Write-Host $Location.PSIsContainer
+            if ($Recurse) {
+                $Files += @(Get-ChildItem -LiteralPath $Location.FullName -Recurse | Where-Object {$_.Name -like "$($FileStart)*"} | Sort-Object Name)
+            } else {
+                $Files += @(Get-ChildItem -LiteralPath $Location.FullName | Where-Object {$_.Name -like "$($FileStart)*"} | Sort-Object Name)
+            }
+        } else {
+            $Files += $Location
+        }
+    }
+
+    if ($Files.Count -eq 0) {
+        return
+    }
+
     $Headers = @{Accept = 'application/json'; Authorization = "Bearer $($Token)"}
     $Episodes = @()
     $More = $true
@@ -37,7 +62,6 @@ function Rename-TVEpisode {
 
     Write-Host "Found $($Episodes.Count) episodes"
 
-    $Files = @(Get-ChildItem *.mkv | Where {$_.Name -like "$($FileStart)*"} | sort Name)
 
     for ($i = 0; $i -lt $Files.Count; $i++) {
         $File = $Files[$i]
