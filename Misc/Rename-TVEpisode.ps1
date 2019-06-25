@@ -20,15 +20,15 @@ function Rename-TVEpisode {
     )
     
     $Files = @()
-    Write-Host $Path.Count
+    #Write-Host $Path.Count
     foreach ($P in $Path) {
         $Location = Get-Item -LiteralPath $P
         if ($Location.PSIsContainer) {
-            Write-Host $Location.PSIsContainer
+            #Write-Host $Location.PSIsContainer
             if ($Recurse) {
-                $Files += @(Get-ChildItem -LiteralPath $Location.FullName -Recurse | Where-Object {$_.Name -like "$($FileStart)*"} | Sort-Object Name)
+                $Files += @(Get-ChildItem -LiteralPath $Location.FullName -Recurse | Where-Object {$_.Name -like "$($FileStart)*" -or $_.Name -match "^$($FileStart)"} | Sort-Object Name)
             } else {
-                $Files += @(Get-ChildItem -LiteralPath $Location.FullName | Where-Object {$_.Name -like "$($FileStart)*"} | Sort-Object Name)
+                $Files += @(Get-ChildItem -LiteralPath $Location.FullName | Where-Object {$_.Name -like "$($FileStart)*" -or $_.Name -match "^$($FileStart)"} | Sort-Object Name)
             }
         } else {
             $Files += $Location
@@ -70,7 +70,7 @@ function Rename-TVEpisode {
         $FileName = $File.Name
         [String[]]$Titles = @()
 
-        if ($Name -match "^$($FileStart) - s([0-9]{1,2})e([0-9]{1,2})`$") {
+        if ($Name -match "^$($FileStart)[^a-z0-9]*s([0-9]{1,2})e([0-9]{1,2})`$") {
             $Season = [Int]($Matches[1])
             $EpisodeNum = [Int]($Matches[2])
             $Found = $null
@@ -98,12 +98,23 @@ function Rename-TVEpisode {
             $TitleExtra = ($Title -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim()
             Write-Verbose "TitleExtra:           $($TitleExtra)"
             foreach ($Episode in $Episodes) {
-                Write-Verbose "EpisodeName:          $($Episode.EpisodeName)"
-                Write-Verbose "EpisodeNameTrim:      $($Episode.EpisodeNameTrim)"
-                Write-Verbose "EpisodeNameTrimExtra: $($Episode.EpisodeNameTrimExtra)"
+                #Write-Verbose "EpisodeName:          $($Episode.EpisodeName)"
+                #Write-Verbose "EpisodeNameTrim:      $($Episode.EpisodeNameTrim)"
+                #Write-Verbose "EpisodeNameTrimExtra: $($Episode.EpisodeNameTrimExtra)"
                 if ($Episode.EpisodeNameTrim -eq $Title -or $Episode.EpisodeNameTrimExtra -eq $TitleExtra) {
                     $Found += $Episode
                     Write-Verbose "Found episode $($Episode.EpisodeNameTrim)"
+                }
+            }
+            # Catch files with a "-1" at the end of the name.
+            if ($Found.count -eq 0 -and $Title.Trim() -match '-[0-9]{1}$') {
+                $Title2 = $Title.Trim() -replace '-[0-9]{1}$', ''
+                $Title2Extra = ($Title2 -replace '\.',' ' -replace '[^a-z0-9 ]','').Trim()
+                foreach ($Episode in $Episodes) {
+                    if ($Episode.EpisodeNameTrim -eq $Title2 -or $Episode.EpisodeNameTrimExtra -eq $Title2Extra) {
+                        $Found += $Episode
+                        Write-Verbose "Found episode $($Episode.EpisodeNameTrim)"
+                    }
                 }
             }
             if ($Found.count -eq 1) {
@@ -133,6 +144,7 @@ function Rename-TVEpisode {
                         }
                     }
                     if ($Found.count -eq 1) {
+                        Write-Verbose "Renaming method 3: Matched '$($FileName)' to '$($NewName)' on unique word '$($Word)'"
                         $NewName = "$($Found[0].FileBaseName)$($Extension)"
                         if ($FileName -eq $NewName) {
                             Write-Host "Skipping correctly named '$($FileName)'"
@@ -141,6 +153,23 @@ function Rename-TVEpisode {
                             if ($Rename) {
                                 Rename-Item $($FileName) -NewName $NewName
                             }
+                        }
+                        break
+                    }
+                }
+            }
+
+            if ($Found.count -eq 0) {
+                if ($Name -match "^$($FileStart)[^a-z0-9]+s([0-9]{1,2})e([0-9]{1,2})[^a-z0-9]+.*`$") {
+                    $Season = [Int]($Matches[1])
+                    $EpisodeNum = [Int]($Matches[2])
+                    $Found = $null
+                    $Found = @($Episodes | Where-Object {$_.airedSeason -eq $Season -and $_.airedEpisodeNumber -eq $EpisodeNum})
+                    if ($Found) {
+                        $NewName = "$($Found[0].FileBaseName)$($Extension)"
+                        Write-Host "Renaming method 4: '$($FileName)' to '$($NewName)'"
+                        if ($Rename) {
+                            Rename-Item $($FileName) -NewName $NewName
                         }
                         break
                     }
