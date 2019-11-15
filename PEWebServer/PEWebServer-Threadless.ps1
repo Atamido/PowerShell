@@ -1060,18 +1060,18 @@ function Get-HTMLFileSystem {
     }
 
     #  Header at top to show a back link, and the current path
-    $HTMLOut += "<p>Provider: $($Provider)</p>`r`n"
-    $HTMLOut += "<p>Path: $($LocalPath)</p>`r`n"
+    $HTMLOut += "<p>Provider: $([System.Web.HttpUtility]::HtmlEncode(($Provider)))</p>`r`n"
+    $HTMLOut += "<p>Path: $([System.Web.HttpUtility]::HtmlEncode(($LocalPath)))</p>`r`n"
 
     #  Print table headers
     $HTMLOut += '<table border="1"><tr>'
-    $HTMLOut += "<th>$($CurrentProperties[0])</th>"
+    $HTMLOut += "<th>$([System.Web.HttpUtility]::HtmlEncode(($CurrentProperties[0])))</th>"
     $First = $CurrentProperties[0]
     #  All properties but the first one
     if ($CurrentProperties.Count -gt 1) {
         $CurrentProperties = @($CurrentProperties[1..($CurrentProperties.Count - 1)])
         foreach ($CurrentProperty in $CurrentProperties) {
-            $HTMLOut += "<th>$($CurrentProperty)</th>"
+            $HTMLOut += "<th>$([System.Web.HttpUtility]::HtmlEncode(($CurrentProperty)))</th>"
         }
     }
     else {
@@ -1083,17 +1083,20 @@ function Get-HTMLFileSystem {
 
     #  Print out each file/folder/container/key with desired information
     foreach ($Loc in $Locations) {
+        $LocFirst = $Loc.($First)
+        $LocFirstH = [System.Web.HttpUtility]::HtmlEncode(($LocFirst))
         if ($Provider -eq 'PSDrive' -or $Loc.PSIsContainer) {
             #  If a folder/container, include a link to show its contents
-            $HTMLOut += "<tr><td><a href=`"$($u)$($Loc.($First))/`">$($Loc.($First))</a></td>"
+            $HTMLOut += "<tr><td><a href=`"$($u)$([System.Web.HttpUtility]::HtmlEncode(([System.Web.HttpUtility]::UrlEncode(($LocFirst)))))/`">$($LocFirstH)</a></td>"
         }
         elseif ($Provider -eq 'FileSystem') {
             #  If a file, put a download link
-            $DownloadURL = "/download/$($Drive)$($FolderPath)$($Loc.($First))" -replace '\\', '/'
-            $HTMLOut += "<tr><td><a href=`"$($DownloadURL)`">$($Loc.($First))</a></td>"
+            $DownloadURL = "/download/$($Drive)$($FolderPath)$($LocFirst)" -replace '\\', '/'
+            $DownloadURL = @($DownloadURL -split '/' | ForEach-Object {[System.Web.HttpUtility]::UrlEncode(($_))}) -join '/'
+            $HTMLOut += "<tr><td><a href=`"$([System.Web.HttpUtility]::HtmlEncode(($DownloadURL)))`">$($LocFirstH)</a></td>"
         }
         else {
-            $HTMLOut += "<tr><td>$($Loc.$($First))</td>"
+            $HTMLOut += "<tr><td>$($LocFirstH)</td>"
         }
         #  Include the other desired item properties
         if ($CurrentProperties.Count -gt 0) {
