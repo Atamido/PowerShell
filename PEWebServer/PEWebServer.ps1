@@ -429,6 +429,10 @@ function Invoke-HTTPRequest {
         Write-Verbose "Invoke-HTTPRequest: Body for $($Client):`n$($HttpListenerRequest.BodyString)"
     }
 
+    if ($SharedVariables['Logging']) {
+        Send-LogData -SharedVariables $SharedVariables -HttpListenerRequest $HttpListenerRequest -TCPClient $TCPClient
+    }
+
     #  Checking to see if the posted body was from the New-PostForm.
     If ($HttpListenerRequest.HttpMethod -eq 'POST' -and $HttpListenerRequest.BodyString -match '^(winpepostform=)(.*)$') {
         Write-Verbose "Invoke-HTTPRequest: Changing request body from '$($HttpListenerRequest.BodyString)' to '$($HttpListenerRequest.BodyString -replace '^(winpepostform=)(.*)$', '$2')'"
@@ -442,6 +446,9 @@ function Invoke-HTTPRequest {
         Write-Verbose 'Invoke-HTTPRequest: Shutting down...'
         $HTTPResponseBytes = New-HTTPResponseBytes -HTTPBodyString ("Shutting down TCP Server on port $Port" | ConvertTo-Json -Depth 1)
         $SharedVariables['WebServerActive'] = $False
+        if ($SharedVariables['Logging']) {
+            $null = $SharedVariables['LogEventWaitHandle'].Set()
+        }
         $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
         return
     }
@@ -706,6 +713,52 @@ function New-PostForm {
     $HTMLPostForm = $HTMLPostForm -replace '/PreviousGETLocation', $URI
 
     return $HTMLPostForm
+}
+
+
+#  Add data to a queue and trigger an event.  Collapses 2 lines to 1 simpler line
+function Send-LogData {
+    [CmdletBinding()]
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [System.Net.Sockets.TcpClient]$TcpClient,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [PSObject]$HttpListenerRequest,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [HashTable]$SharedVariables
+    )
+
+    $VerbosePreference = $SharedVariables['VerbosePreference']
+
+    if ($HttpListenerRequest.BodyString.Length -gt 1000) {
+        $BodyString = "$($HttpListenerRequest.BodyString.Substring(0,1000))"
+    }
+    else {
+        $BodyString = "$($HttpListenerRequest.BodyString)"
+    }
+
+    $attributes = @{
+        'computerid' = "$($SharedVariables['computerid'])"
+        'clientip'   = "$($TCPClient.client.RemoteEndPoint.Address.IPAddressToString)"
+        'clientport' = "$($TCPClient.client.RemoteEndPoint.Port)"
+        'serverip'   = "$($TCPClient.client.LocalEndPoint.Address.IPAddressToString)"
+        'serverport' = "$($TCPClient.client.LocalEndPoint.Port)"
+        'url'        = "$($HttpListenerRequest.RawUrl)"
+        'httpmethod' = "$($HttpListenerRequest.HttpMethod)"
+        'bodystring' = $BodyString
+    }
+
+    $log = @{
+        'timestamp'  = (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s)
+        'service_id'      = "$($SharedVariables['LoggingKey'])"
+        'tag'        = "$($attributes['serverip'])"
+        'log_type'   = 'pewebserver'
+        'attributes' = $attributes
+    }
+
+    $null = $SharedVariables['LogQueue'].TryAdd(($log | ConvertTo-Json -Compress))
+
+    $null = $SharedVariables['LogEventWaitHandle'].Set()
 }
 
 
@@ -1091,7 +1144,7 @@ function Get-HTMLFileSystem {
         elseif ($Provider -eq 'FileSystem') {
             #  If a file, put a download link
             $DownloadURL = "/download/$($Drive)$($FolderPath)$($LocFirst)" -replace '\\', '/'
-            $DownloadURL = @($DownloadURL -split '/' | ForEach-Object {[System.Web.HttpUtility]::UrlEncode(($_))}) -join '/'
+            $DownloadURL = @($DownloadURL -split '/' | ForEach-Object { [System.Web.HttpUtility]::UrlEncode(($_)) }) -join '/'
             $HTMLOut += "<tr><td><a href=`"$([System.Web.HttpUtility]::HtmlEncode(($DownloadURL)))`">$($LocFirstH)</a></td>"
         }
         else {
@@ -1211,6 +1264,93 @@ function Send-File {
     }
     catch {
         Write-Verbose "Send-File: Unable to open file for reading"
+    }
+    $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 500 -StatusDescription 'Server Error' -HTTPBodyString '<h1>500 - Unable to open file for reading</h1>'
+    $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+    $FileStream.Flush()
+    $FileStream.Dispose()
+}
+
+
+#  Takes a file path, and writes the data back on the TCP stream
+#  Attempting to use the correct mime-type from the registry
+#  Path is everything after "/serve/", not including the slash
+#  Stream bytes are from a TCP connection that are retrieved via:
+#  [System.Net.Sockets.TcpListener]->.AcceptTcpClient()->.GetStream()
+#  as
+#  [System.Net.Sockets.NetworkStream]->.Read()
+#  HeaderOnly is for returning a reply to an HTTP HEAD request, which does not include file contents
+#  HeaderOnly is not yet implemented
+function Send-WebFile {
+    [cmdletbinding()]
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$Path,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [System.Net.Sockets.NetworkStream]$Stream,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [Bool]$HeaderOnly = $false
+    )
+
+
+    $Drive = $Path -replace '^(.+?)/.*$', '$1'
+    $FolderPath = $Path -replace '^.+?(/.*)$', '$1' -replace '/', '\'
+    $LocalPath = "$($Drive):$($FolderPath)"
+    Write-Verbose "Send-WebFile: Path is $($LocalPath)"
+
+    #  If there is no file, return a 404 error
+    if ([String]::IsNullOrEmpty($Path) -or -not (Test-Path -Path $LocalPath -PathType Leaf) -or (Get-Item -Path $LocalPath).PSProvider.Name -ne 'FileSystem') {
+        Write-Verbose "Send-WebFile: Unable to find find file"
+        $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 404 -StatusDescription 'Not Found' -HTTPBodyString '<h1>404 - File not found</h1>'
+        $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+        return
+    }
+
+    [String]$Extension = (Get-Item -Path $LocalPath).Extension
+    [String]$LastModified = Get-Date -Date ((Get-Item $LocalPath).LastWriteTime) -Format r
+
+    try {
+        $FileStream = New-Object -TypeName System.IO.FileStream -ArgumentList ((Resolve-Path -Path $LocalPath), 'Open', 'Read', 'ReadWrite')
+        if ($FileStream.CanRead) {
+
+            [String]$MimeType = 'application/unknown'
+
+            if ((!([String]::IsNullOrWhiteSpace($Extension))) -and (Test-Path -LiteralPath "HKLM:\SOFTWARE\Classes\$($Extension)")) {
+                $RegKey = Get-Item -LiteralPath "HKLM:\SOFTWARE\Classes\$($Extension)"
+                if ($RegKey.Property -contains 'Content Type' -and -not [String]::IsNullOrWhiteSpace($RegKey.GetValue('Content Type'))) {
+                    $MimeType = $RegKey.GetValue('Content Type')
+                }
+
+            }
+
+            $Headers = @{
+                'Content-Transfer-Encoding' = $MimeType
+                'Content-Description'       = 'File Transfer'
+                'Cache-Control'             = 'no-cache, no-store, must-revalidate'
+                'Pragma'                    = 'no-cache'
+                'Expires'                   = '0'
+                'Last-Modified'             = $LastModified
+            }
+            [Long]$FileLength = $FileStream.Length
+            Write-Verbose "Send-WebFile: Sending file of size: $($FileLength) bytes"
+            $HTTPResponseBytes = New-HTTPResponseBytes -Headers $Headers -ContentLength64 $FileLength
+            $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+            Write-Verbose "Send-WebFile: Copying file stream"
+            $FileStream.CopyTo($Stream)
+            $FileStream.Flush()
+            $FileStream.Dispose()
+
+            Remove-Variable HTTPResponseBytes
+            [System.GC]::Collect()
+
+            return
+        }
+        else {
+            Write-Verbose "Send-WebFile: Unable to read file"
+        }
+    }
+    catch {
+        Write-Verbose "Send-WebFile: Unable to open file for reading"
     }
     $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 500 -StatusDescription 'Server Error' -HTTPBodyString '<h1>500 - Unable to open file for reading</h1>'
     $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
@@ -1430,6 +1570,13 @@ function Update-WebSchema {
             }
             DefaultReply = $false
         }, @{
+            Path         = '/serve/{Path}'
+            method       = 'get'
+            Script       = {
+                Send-WebFile -Path $Parameters.Path -Stream $Parameters.Stream
+            }
+            DefaultReply = $false
+        }, @{
             Path   = '/test'
             Method = 'get'
             Script = {
@@ -1588,7 +1735,6 @@ function Get-SystemInformation {
 }
 
 
-
 function New-RunspacePool {
     [cmdletbinding()]
     Param (
@@ -1610,7 +1756,9 @@ function New-RunspacePool {
         'Search-Binary',
         'Send-Favicon',
         'Send-File',
-        'Send-Screen'
+        'Send-Screen',
+        'Send-WebFile',
+        'Send-LogData'
     )
 
     $InitialSessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
@@ -1738,6 +1886,20 @@ function Start-ListenerRunspace {
                 $ClientIP = $TCPClient.client.RemoteEndPoint.Address.IPAddressToString
                 Write-Verbose "New connection from $($ClientIP)"
 
+                if ($SharedVariables['ClientIPBlacklist']) {
+                    if ($SharedVariables['ClientIPBlacklistRegex'].Match($ClientIP).Success) {
+                        Write-Verbose "Terminating connection from blacklisted IP: $($ClientIP)"
+                        [Void]$TCPClient.Close()
+
+                        #  Free up memory
+                        if (Test-Path Variable:\TcpClient) {
+                            Remove-Variable TcpClient
+                        }
+
+                        continue
+                    }
+                }
+
                 # Set parameters and values to import into the runspace that will be used in the script
                 $ParamList = @{
                     TCPClient         = $TCPClient
@@ -1779,6 +1941,80 @@ function Start-ListenerRunspace {
 }
 
 
+function Start-LoggingRunspace {
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [HashTable]$SharedVariables
+    )
+
+    $RunspacePool = $SharedVariables['RunspacePool']
+    $Jobs = $SharedVariables['Jobs']
+    $VerbosePreference = $SharedVariables['VerbosePreference']
+
+    [ScriptBlock]$ScriptBlock = {
+        Param (
+            [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+            [HashTable]$SharedVariables
+        )
+
+        $VerbosePreference = $SharedVariables['VerbosePreference']
+        $Queue = $SharedVariables['LogQueue']
+        $EventWaitHandle = $SharedVariables['LogEventWaitHandle']
+        $Uri = $SharedVariables['LoggingURI']
+
+        while ($SharedVariables['WebServerActive']) {
+            while ($Queue.Count -gt 0) {
+                [String]$Time = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                Write-Verbose "Start-LoggingRunspace: $($Time) Consumer Queue count is $($Queue.Count)"
+                $QueueValue = $null
+
+                if ($Queue.TryPeek([ref]$QueueValue)) {
+                    try {
+                        Write-Verbose "Start-LoggingRunspace: $($Time) Consumer $($QueueValue)"
+                        $null = Invoke-RestMethod -Method Post -UseBasicParsing -Uri $Uri -Body ($QueueValue) -ContentType 'application/json'
+                        if ($Queue.TryDequeue([ref]$QueueValue)) {
+                            Write-Verbose "Start-LoggingRunspace: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')) Consumer Success"
+                        }
+                        else {
+                            Write-Warning "Start-LoggingRunspace: $($Time) Remove $($QueueValue)"
+                        }
+                    }
+                    catch {
+                        Write-Error $Error[0]
+                        Write-Warning "Start-LoggingRunspace: $($Time) Dequeue $($QueueValue)"
+                        Start-Sleep 5
+                    }
+
+                }
+                else {
+                    Write-Warning "Start-LoggingRunspace: $($Time) Peek $($QueueValue)"
+                }
+            }
+
+            $EventWaitHandle.WaitOne()
+        }
+
+    }
+
+    # Set parameters and values to import into the runspace that will be used in the script
+    $ParamList = @{
+        SharedVariables = $SharedVariables
+    }
+
+    Write-Verbose "Start-LoggingRunspace: Launching listener runspace"
+    #  Starting new PowerShell runspace to process jobs
+    $PowerShell = [powershell]::Create()
+    $PowerShell.RunspacePool = $RunspacePool
+    [void]$PowerShell.AddScript($ScriptBlock)
+    [void]$PowerShell.AddParameters($ParamList)
+    $Handle = $PowerShell.BeginInvoke()
+    $temp = '' | Select-Object PowerShell, Handle
+    $temp.PowerShell = $PowerShell
+    $temp.handle = $Handle
+    [void]$Jobs.Add($Temp)
+    Write-Verbose "Start-LoggingRunspace: Finished launching listener runspace"
+}
+
 
 #  Start the web server
 #  Port specifies the TCP port to use
@@ -1797,7 +2033,13 @@ function Start-PEHTTPServer {
         [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
         [Object[]] $WebSchema = @(),
         [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
-        [Bool]$IncludeDefaultSchema = $True
+        [Bool]$IncludeDefaultSchema = $True,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$LoggingURI,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$LoggingKey,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$ClientIPBlacklistRegex
     )
 
     $WebSchema = Update-WebSchema -WebSchema $WebSchema -IncludeDefaultSchema $IncludeDefaultSchema
@@ -1825,6 +2067,14 @@ function Start-PEHTTPServer {
     $SharedVariables['ShutdownCommand'] = $ShutdownCommand
     $SharedVariables['Port'] = $Port
     $SharedVariables['VerbosePreference'] = $VerbosePreference
+    $SharedVariables['Logging'] = $false
+    $SharedVariables['ClientIPBlacklist'] = $false
+
+    if (!([String]::IsNullOrWhiteSpace($ClientIPBlacklistRegex))) {
+        $SharedVariables['ClientIPBlacklist'] = $true
+        #  Compiled regex is over twice as fast
+        $SharedVariables['ClientIPBlacklistRegex'] = [System.Text.RegularExpressions.Regex]::new($ClientIPBlacklistRegex, ([System.Text.RegularExpressions.RegexOptions]'Compiled, SingleLine'))
+    }
 
     Write-Verbose "Prepare Runspace environment"
     $RunspacePool = New-RunspacePool
@@ -1833,6 +2083,39 @@ function Start-PEHTTPServer {
     $SharedVariables['RunspacePool'] = $RunspacePool
     $SharedVariables['Jobs'] = $Jobs
     [Int]$PreviousThreads = 0
+
+    if (!([String]::IsNullOrWhiteSpace($LoggingURI) -or [String]::IsNullOrWhiteSpace($LoggingURI))) {
+        Write-Verbose "Preparing logging queue"
+
+        #  Create unique ComputerID to identify computer across logs
+        #  Using serial, UUID, manufacturer, and model, because sometimes the serial or UUID are not filled out properly
+        [String]$Serial = (Get-WmiObject Win32_Bios).SerialNumber
+        [String]$UUID = (Get-WmiObject Win32_ComputerSystemProduct).UUID
+        [String]$Manufacturer = (Get-WmiObject Win32_ComputerSystem).Manufacturer
+        # Support version for Lenovo devices as the Model
+        if ($Manufacturer -eq 'LENOVO') {
+            [String]$Model = (Get-WmiObject Win32_ComputerSystemProduct).Version
+        }
+        Else {
+            [String]$Model = (Get-WmiObject Win32_ComputerSystem).Model
+        }
+        #  Remove potential whitespace that causes confusion with queries
+        $Serial = $Serial.Trim()
+        $Manufacturer = $Manufacturer.Trim()
+        $Model = $Model.Trim()
+        #  The ComputerID is an MD5 hash of various hardware information, in case the serial or UUID were not properly filled in
+        $Hasher = New-Object System.Security.Cryptography.MD5CryptoServiceProvider
+        [String]$HardwareString = "$($Serial),$($UUID),$($Manufacturer),$($Model)"
+        [String]$ComputerID = [guid]::new($Hasher.ComputeHash([System.Text.Encoding]::UTF8.GetBytes("$HardwareString")))
+        $SharedVariables['ComputerID'] = $ComputerID
+
+        $SharedVariables['Logging'] = $true
+        $SharedVariables['LoggingURI'] = $LoggingURI
+        $SharedVariables['LoggingKey'] = $LoggingKey
+        $SharedVariables['LogQueue'] = New-Object 'System.Collections.Concurrent.ConcurrentQueue[String]'
+        $SharedVariables['LogEventWaitHandle'] = New-Object -TypeName 'System.Threading.EventWaitHandle' -ArgumentList @($false, [System.Threading.EventResetMode]::AutoReset)
+        Start-LoggingRunspace -SharedVariables $SharedVariables
+    }
 
     Write-Verbose "Starting listener runspace"
     Start-ListenerRunspace -SharedVariables $SharedVariables
@@ -1874,6 +2157,10 @@ function Start-PEHTTPServer {
         }
     }
 
+    if ($SharedVariables['Logging']) {
+        $null = $SharedVariables['LogEventWaitHandle'].Set()
+    }
+
     Write-Verbose "Stopping listener"
     [Void]$Listener.Stop()
     while (@($Jobs | Where-Object { -not ($_.Handle.IsCompleted) }).Count -ne 0) {
@@ -1883,6 +2170,24 @@ function Start-PEHTTPServer {
 
     Write-Verbose "Disposing of $($Jobs.Count) remaining jobs"
     $Jobs | ForEach-Object {
+        #  Output remaining messages from runspace
+        Write-Verbose "Outputting messages for thread $($_.Handle.AsyncWaitHandle.Handle.ToString()) before disposing"
+        if (-not ([String]::IsNullOrEmpty($_.PowerShell.Streams.Error))) {
+            Write-Error ($_.PowerShell.Streams.Error | Out-String)
+        }
+        if (-not ([String]::IsNullOrEmpty($_.PowerShell.Streams.Verbose))) {
+            Write-Verbose ($_.PowerShell.Streams.Verbose | Out-String)
+        }
+        if (-not ([String]::IsNullOrEmpty($_.PowerShell.Streams.Debug))) {
+            Write-Debug ($_.PowerShell.Streams.Debug | Out-String)
+        }
+        if (-not ([String]::IsNullOrEmpty($_.PowerShell.Streams.Warning))) {
+            Write-Warning ($_.PowerShell.Streams.Warning | Out-String)
+        }
+        if (-not ([String]::IsNullOrEmpty($_.PowerShell.Streams.Information))) {
+            Write-Information ($_.PowerShell.Streams.Information | Out-String)
+        }
+
         [Void]$_.powershell.EndInvoke($_.handle)
         [Void]$_.PowerShell.Dispose()
     }
@@ -1896,4 +2201,8 @@ else {
     & netsh advfirewall set currentprofile state off
 }
 
-Start-PEHTTPServer -Port 8082
+#[String]$LoggingURI = 'http://logs.example.com'
+#[String]$LoggingKey = '5e94a58dd3fea6000716e4ac'
+[String]$ClientIPBlacklistRegex = '\A((10\.21\.2\.135)|(10\.140\.17\..*)|(10\.80\.192\.5)\Z'
+
+Start-PEHTTPServer -Port 8082 -ClientIPBlacklistRegex $ClientIPBlacklistRegex # -LoggingURI $LoggingURI -LoggingKey $LoggingKey 
