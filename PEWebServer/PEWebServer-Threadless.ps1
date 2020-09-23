@@ -430,6 +430,10 @@ function Invoke-HTTPRequest {
         Write-Verbose "Invoke-HTTPRequest: Body for $($Client):`n$($HttpListenerRequest.BodyString)"
     }
 
+    if ($SharedVariables['Logging']) {
+        Send-LogData -SharedVariables $SharedVariables -HttpListenerRequest $HttpListenerRequest -TCPClient $TCPClient
+    }
+
     #  Checking to see if the posted body was from the New-PostForm.
     If ($HttpListenerRequest.HttpMethod -eq 'POST' -and $HttpListenerRequest.BodyString -match '^(winpepostform=)(.*)$') {
         Write-Verbose "Invoke-HTTPRequest: Changing request body from '$($HttpListenerRequest.BodyString)' to '$($HttpListenerRequest.BodyString -replace '^(winpepostform=)(.*)$', '$2')'"
@@ -443,6 +447,9 @@ function Invoke-HTTPRequest {
         Write-Verbose 'Invoke-HTTPRequest: Shutting down...'
         $HTTPResponseBytes = New-HTTPResponseBytes -HTTPBodyString ("Shutting down TCP Server on port $Port" | ConvertTo-Json -Depth 1)
         $SharedVariables['WebServerActive'] = $False
+        if ($SharedVariables['Logging']) {
+            $null = $SharedVariables['LogEventWaitHandle'].Set()
+        }
         $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
         return
     }
@@ -707,6 +714,52 @@ function New-PostForm {
     $HTMLPostForm = $HTMLPostForm -replace '/PreviousGETLocation', $URI
 
     return $HTMLPostForm
+}
+
+
+#  Add data to a queue and trigger an event.  Collapses 2 lines to 1 simpler line
+function Send-LogData {
+    [CmdletBinding()]
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [System.Net.Sockets.TcpClient]$TcpClient,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [PSObject]$HttpListenerRequest,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [HashTable]$SharedVariables
+    )
+
+    $VerbosePreference = $SharedVariables['VerbosePreference']
+
+    if ($HttpListenerRequest.BodyString.Length -gt 1000) {
+        $BodyString = "$($HttpListenerRequest.BodyString.Substring(0,1000))"
+    }
+    else {
+        $BodyString = "$($HttpListenerRequest.BodyString)"
+    }
+
+    $attributes = @{
+        'computerid' = "$($SharedVariables['computerid'])"
+        'clientip'   = "$($TCPClient.client.RemoteEndPoint.Address.IPAddressToString)"
+        'clientport' = "$($TCPClient.client.RemoteEndPoint.Port)"
+        'serverip'   = "$($TCPClient.client.LocalEndPoint.Address.IPAddressToString)"
+        'serverport' = "$($TCPClient.client.LocalEndPoint.Port)"
+        'url'        = "$($HttpListenerRequest.RawUrl)"
+        'httpmethod' = "$($HttpListenerRequest.HttpMethod)"
+        'bodystring' = $BodyString
+    }
+
+    $log = @{
+        'timestamp'  = (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s)
+        'service_id'      = "$($SharedVariables['LoggingKey'])"
+        'tag'        = "$($attributes['serverip'])"
+        'log_type'   = 'pewebserver'
+        'attributes' = $attributes
+    }
+
+    $null = $SharedVariables['LogQueue'].TryAdd(($log | ConvertTo-Json -Compress))
+
+    $null = $SharedVariables['LogEventWaitHandle'].Set()
 }
 
 
@@ -1092,7 +1145,7 @@ function Get-HTMLFileSystem {
         elseif ($Provider -eq 'FileSystem') {
             #  If a file, put a download link
             $DownloadURL = "/download/$($Drive)$($FolderPath)$($LocFirst)" -replace '\\', '/'
-            $DownloadURL = @($DownloadURL -split '/' | ForEach-Object {[System.Web.HttpUtility]::UrlEncode(($_))}) -join '/'
+            $DownloadURL = @($DownloadURL -split '/' | ForEach-Object { [System.Web.HttpUtility]::UrlEncode(($_)) }) -join '/'
             $HTMLOut += "<tr><td><a href=`"$([System.Web.HttpUtility]::HtmlEncode(($DownloadURL)))`">$($LocFirstH)</a></td>"
         }
         else {
@@ -1212,6 +1265,93 @@ function Send-File {
     }
     catch {
         Write-Verbose "Send-File: Unable to open file for reading"
+    }
+    $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 500 -StatusDescription 'Server Error' -HTTPBodyString '<h1>500 - Unable to open file for reading</h1>'
+    $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+    $FileStream.Flush()
+    $FileStream.Dispose()
+}
+
+
+#  Takes a file path, and writes the data back on the TCP stream
+#  Attempting to use the correct mime-type from the registry
+#  Path is everything after "/serve/", not including the slash
+#  Stream bytes are from a TCP connection that are retrieved via:
+#  [System.Net.Sockets.TcpListener]->.AcceptTcpClient()->.GetStream()
+#  as
+#  [System.Net.Sockets.NetworkStream]->.Read()
+#  HeaderOnly is for returning a reply to an HTTP HEAD request, which does not include file contents
+#  HeaderOnly is not yet implemented
+function Send-WebFile {
+    [cmdletbinding()]
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$Path,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [System.Net.Sockets.NetworkStream]$Stream,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [Bool]$HeaderOnly = $false
+    )
+
+
+    $Drive = $Path -replace '^(.+?)/.*$', '$1'
+    $FolderPath = $Path -replace '^.+?(/.*)$', '$1' -replace '/', '\'
+    $LocalPath = "$($Drive):$($FolderPath)"
+    Write-Verbose "Send-WebFile: Path is $($LocalPath)"
+
+    #  If there is no file, return a 404 error
+    if ([String]::IsNullOrEmpty($Path) -or -not (Test-Path -Path $LocalPath -PathType Leaf) -or (Get-Item -Path $LocalPath).PSProvider.Name -ne 'FileSystem') {
+        Write-Verbose "Send-WebFile: Unable to find find file"
+        $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 404 -StatusDescription 'Not Found' -HTTPBodyString '<h1>404 - File not found</h1>'
+        $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+        return
+    }
+
+    [String]$Extension = (Get-Item -Path $LocalPath).Extension
+    [String]$LastModified = Get-Date -Date ((Get-Item $LocalPath).LastWriteTime) -Format r
+
+    try {
+        $FileStream = New-Object -TypeName System.IO.FileStream -ArgumentList ((Resolve-Path -Path $LocalPath), 'Open', 'Read', 'ReadWrite')
+        if ($FileStream.CanRead) {
+
+            [String]$MimeType = 'application/unknown'
+
+            if ((!([String]::IsNullOrWhiteSpace($Extension))) -and (Test-Path -LiteralPath "HKLM:\SOFTWARE\Classes\$($Extension)")) {
+                $RegKey = Get-Item -LiteralPath "HKLM:\SOFTWARE\Classes\$($Extension)"
+                if ($RegKey.Property -contains 'Content Type' -and -not [String]::IsNullOrWhiteSpace($RegKey.GetValue('Content Type'))) {
+                    $MimeType = $RegKey.GetValue('Content Type')
+                }
+
+            }
+
+            $Headers = @{
+                'Content-Transfer-Encoding' = $MimeType
+                'Content-Description'       = 'File Transfer'
+                'Cache-Control'             = 'no-cache, no-store, must-revalidate'
+                'Pragma'                    = 'no-cache'
+                'Expires'                   = '0'
+                'Last-Modified'             = $LastModified
+            }
+            [Long]$FileLength = $FileStream.Length
+            Write-Verbose "Send-WebFile: Sending file of size: $($FileLength) bytes"
+            $HTTPResponseBytes = New-HTTPResponseBytes -Headers $Headers -ContentLength64 $FileLength
+            $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+            Write-Verbose "Send-WebFile: Copying file stream"
+            $FileStream.CopyTo($Stream)
+            $FileStream.Flush()
+            $FileStream.Dispose()
+
+            Remove-Variable HTTPResponseBytes
+            [System.GC]::Collect()
+
+            return
+        }
+        else {
+            Write-Verbose "Send-WebFile: Unable to read file"
+        }
+    }
+    catch {
+        Write-Verbose "Send-WebFile: Unable to open file for reading"
     }
     $HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 500 -StatusDescription 'Server Error' -HTTPBodyString '<h1>500 - Unable to open file for reading</h1>'
     $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
@@ -1431,6 +1571,13 @@ function Update-WebSchema {
             }
             DefaultReply = $false
         }, @{
+            Path         = '/serve/{Path}'
+            method       = 'get'
+            Script       = {
+                Send-WebFile -Path $Parameters.Path -Stream $Parameters.Stream
+            }
+            DefaultReply = $false
+        }, @{
             Path   = '/test'
             Method = 'get'
             Script = {
@@ -1606,7 +1753,9 @@ function Start-PEHTTPServer {
         [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
         [Object[]] $WebSchema = @(),
         [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
-        [Bool]$IncludeDefaultSchema = $True
+        [Bool]$IncludeDefaultSchema = $True,
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
+        [String]$ClientIPBlacklistRegex
     )
 
     $WebSchema = Update-WebSchema -WebSchema $WebSchema -IncludeDefaultSchema $IncludeDefaultSchema
@@ -1634,7 +1783,14 @@ function Start-PEHTTPServer {
     $SharedVariables['ShutdownCommand'] = $ShutdownCommand
     $SharedVariables['Port'] = $Port
     $SharedVariables['VerbosePreference'] = $VerbosePreference
+    $SharedVariables['Logging'] = $false
+    $SharedVariables['ClientIPBlacklist'] = $false
 
+    if (!([String]::IsNullOrWhiteSpace($ClientIPBlacklistRegex))) {
+        $SharedVariables['ClientIPBlacklist'] = $true
+        #  Compiled regex is over twice as fast
+        $SharedVariables['ClientIPBlacklistRegex'] = [System.Text.RegularExpressions.Regex]::new($ClientIPBlacklistRegex, ([System.Text.RegularExpressions.RegexOptions]'Compiled, SingleLine'))
+    }
 
     While ($SharedVariables['WebServerActive']) {
         Write-Verbose "Ready to accept TCP client on port $($Port)"
@@ -1702,3 +1858,8 @@ function Start-PEHTTPServer {
     Write-Verbose "Stopping listener"
     [Void]$Listener.Stop()
 }
+
+
+[String]$ClientIPBlacklistRegex = '\A((10\.21\.2\.135)|(10\.140\.17\..*)|(10\.80\.192\.5)\Z'
+
+Start-PEHTTPServer -Port 8082 -ClientIPBlacklistRegex $ClientIPBlacklistRegex
