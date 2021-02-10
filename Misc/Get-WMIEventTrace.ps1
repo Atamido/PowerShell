@@ -1,4 +1,4 @@
-﻿param (
+param (
     [Int]$CaptureSeconds = 300,
     [ValidateScript({Test-Path -LiteralPath $_ -PathType Leaf})]
     [String]$ETLPath,

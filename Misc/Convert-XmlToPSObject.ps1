@@ -1,4 +1,4 @@
-﻿function Convert-XmlToPSObject ($Node){
+function Convert-XmlToPSObject ($Node){
     [String]$NodeType = $Node.NodeType
     [String]$Name = $Node.Name
     [String]$LocalName = $Node.LocalName

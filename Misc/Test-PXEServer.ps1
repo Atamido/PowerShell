@@ -1,4 +1,4 @@
-﻿<#
+<#
 Originating Author: Chris Dent from Origin
 Date: 16/02/2010
 Origin Source: https://www.indented.co.uk/dhcp-discovery/

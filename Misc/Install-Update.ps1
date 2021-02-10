@@ -1,4 +1,4 @@
-﻿param
+param
 (
     [parameter(ValueFromPipeline=$true)]
     [ValidateScript({($_ | %{Test-Path -Path $_ -PathType Container}) -or (($_ | %{Test-Path -Path $_ -PathType Leaf}) -and ($_ | %{(Get-Item $_).Extension -eq '.msu'}))})]

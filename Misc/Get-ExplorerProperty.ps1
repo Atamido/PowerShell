@@ -1,4 +1,4 @@
-﻿function Get-ExplorerProperty {
+function Get-ExplorerProperty {
 <#
 .SYNOPSIS
 Get the Windows Explorer properties for files and folders

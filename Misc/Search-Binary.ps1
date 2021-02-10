@@ -1,4 +1,4 @@
-﻿function Search-Binary {
+function Search-Binary {
     [cmdletbinding()]
     Param (
         [parameter(ValueFromPipeline=$True,ValueFromPipelineByPropertyName=$True,Mandatory=$True)]
