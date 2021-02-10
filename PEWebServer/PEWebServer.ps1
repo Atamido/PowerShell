@@ -1,4 +1,4 @@
-﻿#Requires -Version 4.0
+#Requires -Version 4.0
 <#
     .Synopsis
         Creates a Windows PE compatible web server that will invoke PowerShell code based on routes being asked for by the client.
@@ -750,7 +750,7 @@ function Send-LogData {
 
     $log = @{
         'timestamp'  = (Get-Date -Date (Get-Date).ToUniversalTime() -UFormat %s)
-        'service_id'      = "$($SharedVariables['LoggingKey'])"
+        'service_id' = "$($SharedVariables['LoggingKey'])"
         'tag'        = "$($attributes['serverip'])"
         'log_type'   = 'pewebserver'
         'attributes' = $attributes
@@ -1359,7 +1359,6 @@ function Send-WebFile {
 }
 
 
-
 #  Takes a screenshot and returns an image over the network stream.
 #  If the Window switch it specified, a screenshot of only the active window is returned.
 #  Stream bytes are from a TCP connection that are retrieved via:
@@ -1376,10 +1375,13 @@ function Send-Screen {
         [parameter()]
         [Drawing.Imaging.EncoderParameter]$EncoderParameter = $null,
         [parameter()]
-        [Switch]$Window
+        [Switch]$Window,
+        [parameter()]
+        [Switch]$Hash
     )
 
 
+    $null = Add-Type -AssemblyName 'System.Windows.Forms'
     $Bounds = [System.Windows.Forms.Screen]::AllScreens | Where-Object { $_.Primary -eq $true } | Select-Object -ExpandProperty Bounds
 
     if ($Window) {
@@ -1430,20 +1432,29 @@ function Send-Screen {
         $Bitmap.Save($MemoryStream, $Codec.FormatDescription, $EncoderParameter)
     }
 
-    $Headers = @{
-        'Content-Transfer-Encoding' = $Codec.MimeType
-        'Content-Description'       = 'File Transfer'
-        'Cache-Control'             = 'no-cache, no-store, must-revalidate'
-        'Pragma'                    = 'no-cache'
-        'Expires'                   = '0'
+    if ($Hash) {
+        $HashString = [System.BitConverter]::ToString([System.Security.Cryptography.HashAlgorithm]::Create(“MD5”).ComputeHash($MemoryStream.ToArray())) -replace '-', ''
+        $JSON = @{'Hash' = ($HashString.Substring(0, 8)) } | ConvertTo-Json -Compress
+        Write-Verbose "Send-Screen: Sending hash of screenshot: $($JSON)"
+        $HTTPResponseBytes = New-HTTPResponseBytes -HTTPBodyString $JSON -ContentType 'application/json'
+        $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
     }
-    [Long]$StreamLength = $MemoryStream.Length
-    $MemoryStream.Position = 0
-    Write-Verbose "Send-Screen: Sending screenshot of size: $($StreamLength) bytes"
-    $HTTPResponseBytes = New-HTTPResponseBytes -Headers $Headers -ContentLength64 $StreamLength
-    $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
-    Write-Verbose "Send-Screen: Copying file stream"
-    $MemoryStream.CopyTo($Stream)
+    else {
+        $Headers = @{
+            'Content-Transfer-Encoding' = $Codec.MimeType
+            'Content-Description'       = 'File Transfer'
+            'Cache-Control'             = 'no-cache, no-store, must-revalidate'
+            'Pragma'                    = 'no-cache'
+            'Expires'                   = '0'
+        }
+        [Long]$StreamLength = $MemoryStream.Length
+        $MemoryStream.Position = 0
+        Write-Verbose "Send-Screen: Sending screenshot of size: $($StreamLength) bytes"
+        $HTTPResponseBytes = New-HTTPResponseBytes -Headers $Headers -ContentLength64 $StreamLength
+        $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
+        Write-Verbose "Send-Screen: Copying file stream"
+        $MemoryStream.CopyTo($Stream)
+    }
     $MemoryStream.Flush()
     $MemoryStream.Dispose()
 
@@ -1451,6 +1462,28 @@ function Send-Screen {
     [System.GC]::Collect()
 
     return
+}
+
+
+function Send-ScreenRefresher {
+    [cmdletbinding()]
+    Param (
+        [parameter(ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True, Mandatory = $True)]
+        [System.Net.Sockets.NetworkStream]$Stream
+    )
+
+    $Body = '<html><head><script>var d;var i;var j;var k;var t;var c;var p;var u;var w;var x;function f(){c=new AbortController();p=fetch("/screenhash",' +
+    '{signal:c.signal,});u=setTimeout(() => c.abort(),x);p.then((r)=>{r.text().then((e)=>{if(e !== d){d=e;k.src="/screen";}});}).catch((err)=>{b' +
+    '("red");}).finally(() => clearTimeout(u));}function n(){var l;var m;l=i;m=j;if(this.id == "j"){l=j;m=i;}k=m;l.style.display="block";b' +
+    '("green");m.style.display="none";t.textContent=Date();}function o(){b("red");}function b(a){i.style.borderColor=a;j.style.borderColor=a;}window.onload=()=>' +
+    '{w=10000;x=w / 2;i=document.getElementById("i");j=document.getElementById("j");k=j;i.addEventListener("load",n);i.addEventListener' +
+    '("error",o);j.addEventListener("load",n);j.addEventListener("error",o);t=document.getElementById("t");t.textContent=Date();setInterval' +
+    '(f,w);};</script><style>img{border:0.5em solid green;position:absolute;top:1.5em;}</style></head><body style="margin:0"><span id="t"></span><br/><img id="i"' +
+    'src="/screen"/><img id="j" style="display:none"/></body></html>'
+
+    $HTTPResponseBytes = New-HTTPResponseBytes -ContentType 'text/html' -HTTPBodyString $Body
+    Write-Verbose "Send-ScreenRefresher: Sending response of size: $($HTTPResponseBytes.Count) bytes"
+    $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
 }
 
 
@@ -1567,6 +1600,20 @@ function Update-WebSchema {
             method       = 'get'
             Script       = {
                 Send-Screen -Stream $Parameters.Stream
+            }
+            DefaultReply = $false
+        }, @{
+            Path         = '/screenhash'
+            method       = 'get'
+            Script       = {
+                Send-Screen -Stream $Parameters.Stream -Hash
+            }
+            DefaultReply = $false
+        }, @{
+            Path         = '/screenrefresh'
+            method       = 'get'
+            Script       = {
+                Send-ScreenRefresher -Stream $Parameters.Stream
             }
             DefaultReply = $false
         }, @{
@@ -1757,6 +1804,7 @@ function New-RunspacePool {
         'Send-Favicon',
         'Send-File',
         'Send-Screen',
+        'Send-ScreenRefresher',
         'Send-WebFile',
         'Send-LogData'
     )
