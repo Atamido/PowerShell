@@ -1434,7 +1434,7 @@ function Send-Screen {
     }
 
     if ($Hash) {
-        $HashString = [System.BitConverter]::ToString([System.Security.Cryptography.HashAlgorithm]::Create(“MD5”).ComputeHash($MemoryStream.ToArray())) -replace '-', ''
+        $HashString = [System.BitConverter]::ToString([System.Security.Cryptography.HashAlgorithm]::Create('MD5').ComputeHash($MemoryStream.ToArray())) -replace '-', ''
         $JSON = @{'Hash' = ($HashString.Substring(0, 8)) } | ConvertTo-Json -Compress
         Write-Verbose "Send-Screen: Sending hash of screenshot: $($JSON)"
         $HTTPResponseBytes = New-HTTPResponseBytes -HTTPBodyString $JSON -ContentType 'application/json'
