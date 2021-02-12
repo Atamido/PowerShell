@@ -1,100 +1,106 @@
 <html>
-    <head>
-        <script>
-            var data1;
-            var image1;
-            var image2;
-            var image3;
-            var screenTime;
-            var aController;
-            var aPromise;
-            var aTimeout;
-            var Interval1;
-            var Interval2;
 
-            function imageCheck() {
-                console.log("Attempting fetch ", Date());
-                aController = new AbortController();
-                aPromise = fetch("/screenhash", {
-                    signal: aController.signal,
-                });
-                aTimeout = setTimeout(() => aController.abort(), Interval2);
-                aPromise
-                    .then((response) => {
-                        response.text().then((data2) => {
-                            console.log("response.text ", Date());
-                            console.log("response.text ", data2);
-                            if (data2 !== data1) {
-                                console.log("Screen changed");
-                                data1 = data2;
-                                image3.src = "/screen";
-                            }
-                        });
-                    })
-                    .catch((err) => {
-                        console.error("outside catch err ", Date());
-                        console.error("outside catch err", err);
-                        borderColor("red");
-                    })
-                    .finally(() => clearTimeout(aTimeout));
+<head>
+    <script>
+        var data1;
+        var image1;
+        var image2;
+        var image3;
+        var screenTime;
+        var aController;
+        var aPromise;
+        var aTimeout;
+        var Interval1;
+        var Interval2;
+
+        function imageCheck() {
+            console.log("Attempting fetch ", Date());
+            aController = new AbortController();
+            aPromise = fetch("/screenhash", {
+                signal: aController.signal,
+            });
+            aTimeout = setTimeout(() => aController.abort(), Interval2);
+            aPromise
+                .then((response) => {
+                    response.text().then((data2) => {
+                        console.log("response.text ", Date());
+                        console.log("response.text ", data2);
+                        console.log("response.text length ", data2.length);
+                        if (data2.length !== 19) {
+                            borderColor("red");
+                        }
+                        else if (data2 !== data1) {
+                            console.log("Screen changed");
+                            data1 = data2;
+                            image3.src = "/screen";
+                        }
+                    });
+                })
+                .catch((err) => {
+                    console.error("outside catch err ", Date());
+                    console.error("outside catch err", err);
+                    borderColor("red");
+                })
+                .finally(() => clearTimeout(aTimeout));
+        }
+
+        function imageFound() {
+            console.log("Loaded image ", Date());
+            console.log("Loaded image ", this.id);
+            var newImage;
+            var oldImage;
+            newImage = image1;
+            oldImage = image2;
+            if (this.id == "image2") {
+                newImage = image2;
+                oldImage = image1;
             }
+            image3 = oldImage;
+            newImage.style.display = "block";
+            borderColor("green");
+            oldImage.style.display = "none";
+            screenTime.textContent = Date();
+        }
 
-            function imageFound() {
-                console.log("Loaded image ", Date());
-                console.log("Loaded image ", this.id);
-                var newImage;
-                var oldImage;
-                newImage = image1;
-                oldImage = image2;
-                if (this.id == "image2") {
-                    newImage = image2;
-                    oldImage = image1;
-                }
-                image3 = oldImage;
-                newImage.style.display = "block";
-                borderColor("green");
-                oldImage.style.display = "none";
-                screenTime.textContent = Date();
-            }
+        function imageNotFound() {
+            console.log("Failed to load image ", this.id);
+            borderColor("red");
+        }
 
-            function imageNotFound() {
-                console.log("Failed to load image ", this.id);
-                borderColor("red");
-            }
+        function borderColor(bcolor) {
+            console.log("Set border color ", bcolor);
+            image1.style.borderColor = bcolor;
+            image2.style.borderColor = bcolor;
+        }
 
-            function borderColor(bcolor) {
-                console.log("Set border color ", bcolor);
-                image1.style.borderColor = bcolor;
-                image2.style.borderColor = bcolor;
-            }
+        window.onload = () => {
+            Interval1 = 10000;
+            Interval2 = Interval1 / 2;
+            image1 = document.getElementById("image1");
+            image2 = document.getElementById("image2");
+            image3 = image2;
+            image1.addEventListener("load", imageFound);
+            image1.addEventListener("error", imageNotFound);
+            image2.addEventListener("load", imageFound);
+            image2.addEventListener("error", imageNotFound);
+            screenTime = document.getElementById("time");
+            screenTime.textContent = Date();
+            setInterval(imageCheck, Interval1);
+        };
+    </script>
+    <style>
+        img {
+            border: 0.5em solid green;
+            position: absolute;
+            top: 1.5em;
+        }
+    </style>
+</head>
 
-            window.onload = () => {
-                Interval1 = 10000;
-                Interval2 = Interval1 / 2;
-                image1 = document.getElementById("image1");
-                image2 = document.getElementById("image2");
-                image3 = image2;
-                image1.addEventListener("load", imageFound);
-                image1.addEventListener("error", imageNotFound);
-                image2.addEventListener("load", imageFound);
-                image2.addEventListener("error", imageNotFound);
-                screenTime = document.getElementById("time");
-                screenTime.textContent = Date();
-                setInterval(imageCheck, Interval1);
-            };
-        </script>
-        <style>
-            img {
-                border: 0.5em solid green;
-                position: absolute;
-                top: 1.5em;
-            }
-        </style>
-    </head>
+<body style="margin: 0">
+    <span id="time"></span><br />
+    <img id="image1" src="/screen" />
+    <img id="image2" style="display: none" />
+</body>
 
-    <body style="margin: 0">
-        <span id="time"></span><br />
-        <img id="image1" src="/screen" />
-        <img id="image2" style="display: none" />
-    </body>
 </html>

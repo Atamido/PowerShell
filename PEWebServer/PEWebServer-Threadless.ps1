@@ -36,6 +36,7 @@
             /process/{name}
             /run
             /screen
+            /screenrefresh
             /test
             /upload
             /vnc
@@ -172,6 +173,13 @@
         https://learn-powershell.net/2014/02/22/building-a-tcp-server-using-powershell/
         https://gallery.technet.microsoft.com/scriptcenter/TCP-Server-Module-80f781eb
         https://www.powershellgallery.com/packages/PowerShellCookbook/1.3.6
+
+        Worthwhile mention:
+
+        This weirdly similar, but significantly more featureful (SSL, SMTP, GZip, etc) web server, written after PEWebServer.
+        They rewrote the HTTPListener also, but for their own reasons.  It's possible this code could also be adapted to run in WinPE.
+        Pode - PowerShell Web Server
+        https://github.com/Badgerati/Pode
 
 #>
 
@@ -541,11 +549,12 @@ function Receive-HTTPData {
     [Byte[]]$HTTPBytes = @()
     [Bool]$OriginalHeader = $True
     [PSObject]$HttpListenerRequest = New-Object psobject -Property @{IsValid = [Bool]$False; HTTPBytes = [Byte[]]@() }
+    $ThreadId = [AppDomain]::GetCurrentThreadId()
 
     [String]$ClientIP = $TCPClient.client.RemoteEndPoint.Address.IPAddressToString
     [String]$ClientPort = $TCPClient.client.RemoteEndPoint.Port
     [String]$Client = "$($ClientIP):$($ClientPort)"
-    Write-Verbose "Receive-HTTPData: Connection status: $($TCPClient.Connected) from $($Client)"
+    Write-Verbose "Receive-HTTPData: Connection status: $($TCPClient.Connected) from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
 
     [Bool]$OriginalHeader = $True
     $StopWatch = New-Object -TypeName System.Diagnostics.Stopwatch
@@ -556,10 +565,10 @@ function Receive-HTTPData {
         If ($Stream.DataAvailable) {
             Do {
                 $Bytes.Clear()
-                Write-Verbose "Receive-HTTPData: $($TCPClient.Available) Bytes available from $($Client)"
+                Write-Verbose "Receive-HTTPData: $($TCPClient.Available) Bytes available from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 $BytesReceived = $Stream.Read($Bytes, 0, $Bytes.Length)
                 If ($BytesReceived -gt 0) {
-                    Write-Verbose "Receive-HTTPData: $bytesReceived Bytes received from $($Client)"
+                    Write-Verbose "Receive-HTTPData: $bytesReceived Bytes received from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                     if ($BytesReceived -eq $BufferSize) {
                         $BytesList.AddRange($Bytes)
                     }
@@ -577,18 +586,18 @@ function Receive-HTTPData {
             $BytesList.CopyTo($HTTPBytes)
 
             #  Parse HTTP header/body into object that is similar to [System.Net.HttpListenerRequest]
-            Write-Verbose "Receive-HTTPData: Parsing $($HTTPBytes.Count) bytes received from $($Client)"
+            Write-Verbose "Receive-HTTPData: Parsing $($HTTPBytes.Count) bytes received from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
             $HttpListenerRequest = ConvertFrom-HTTP -HTTPBytes $HTTPBytes -TcpClient $TCPClient
 
             if ($OriginalHeader -and $HttpListenerRequest.Headers.ContainsKey('Expect') -and $HttpListenerRequest.Headers['Expect'] -eq '100-continue') {
-                Write-Verbose "Receive-HTTPData: 'Expect: 100-continue' received from $($Client)"
+                Write-Verbose "Receive-HTTPData: 'Expect: 100-continue' received from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 $OriginalHeader = $false
                 [Byte[]]$HTTPResponseBytes = New-HTTPResponseBytes -StatusCode 100 -StatusDescription '(Continue)' -Headers @{ }
-                Write-Verbose "Receive-HTTPData: Replying with $($HTTPResponseBytes.count) bytes to $($Client) to request additional payload"
+                Write-Verbose "Receive-HTTPData: Replying with $($HTTPResponseBytes.count) bytes to $($Client) to request additional payload in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 $Stream.Write($HTTPResponseBytes, 0, $HTTPResponseBytes.length)
             }
             elseif ($HttpListenerRequest.IsValid -and -not ($Stream.DataAvailable)) {
-                Write-Verbose "Receive-HTTPData: Successfully parsed $($HTTPBytes.count) bytes from $($Client)"
+                Write-Verbose "Receive-HTTPData: Successfully parsed $($HTTPBytes.count) bytes from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 return $HttpListenerRequest
             }
 
@@ -600,21 +609,22 @@ function Receive-HTTPData {
         Start-Sleep -Milliseconds 100
         if (-not ($Stream.DataAvailable)) {
             #  Clear out a hung connection
-            if ($BytesList.Count -eq 0 -and $StopWatch.ElapsedMilliseconds -gt 500) {
-                Write-Warning "Receive-HTTPData: Closing Connection with no data from $($Client)"
+            #  Or clearing out connections Chrome opened up "just in case"
+            if ($BytesList.Count -eq 0 -and $StopWatch.ElapsedMilliseconds -gt 120000) {
+                Write-Warning "Receive-HTTPData: Closing Connection with no data from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 return $HttpListenerRequest
             }
-            elseif ($StopWatch.ElapsedMilliseconds -gt 2000) {
-                Write-Warning "Receive-HTTPData: Closing expired connection from $($Client)"
+            elseif ($StopWatch.ElapsedMilliseconds -gt 120000) {
+                Write-Warning "Receive-HTTPData: Closing expired connection from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 return $HttpListenerRequest
             }
             elseif (-not ($SharedVariables['WebServerActive'])) {
-                Write-Warning "Receive-HTTPData: Server shutting down. Closing connection from $($Client)"
+                Write-Warning "Receive-HTTPData: Server shutting down. Closing connection from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
                 return $HttpListenerRequest
             }
         }
     }
-    Write-Warning "Receive-HTTPData: Connection closed unexpectedly from $($Client)"
+    Write-Warning "Receive-HTTPData: Connection closed unexpectedly from $($Client) in thread $($ThreadId) at $((Get-Date).ToString('HH:mm:ss.fff'))"
     return $HttpListenerRequest
 }
 
@@ -1474,7 +1484,7 @@ function Send-ScreenRefresher {
     )
 
     $Body = '<html><head><script>var d;var i;var j;var k;var t;var c;var p;var u;var w;var x;function f(){c=new AbortController();p=fetch("/screenhash",' +
-    '{signal:c.signal,});u=setTimeout(() => c.abort(),x);p.then((r)=>{r.text().then((e)=>{if(e !== d){d=e;k.src="/screen";}});}).catch((err)=>{b' +
+    '{signal:c.signal,});u=setTimeout(() => c.abort(),x);p.then((r)=>{r.text().then((e)=>{if(e.length !== 19){b("red");}else if(e !== d){d=e;k.src="/screen";}});}).catch((err)=>{b' +
     '("red");}).finally(() => clearTimeout(u));}function n(){var l;var m;l=i;m=j;if(this.id == "j"){l=j;m=i;}k=m;l.style.display="block";b' +
     '("green");m.style.display="none";t.textContent=Date();}function o(){b("red");}function b(a){i.style.borderColor=a;j.style.borderColor=a;}window.onload=()=>' +
     '{w=10000;x=w / 2;i=document.getElementById("i");j=document.getElementById("j");k=j;i.addEventListener("load",n);i.addEventListener' +
