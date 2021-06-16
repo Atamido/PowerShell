@@ -1,40 +1,39 @@
 Function Get-Window {
     [OutputType([PSCustomObject])]
     Param(
-        [Parameter(ParameterSetName='Default', Mandatory=$false)]
-        [Parameter(ParameterSetName='Process', Mandatory=$false)]
+        [Parameter(ParameterSetName = 'Default', Mandatory = $false)]
+        [Parameter(ParameterSetName = 'Process', Mandatory = $false)]
         [String]
         $WindowTitle,
 
-        [Parameter(ParameterSetName='Default', Mandatory=$false)]
-        [Parameter(ParameterSetName='Process', Mandatory=$false)]
+        [Parameter(ParameterSetName = 'Default', Mandatory = $false)]
+        [Parameter(ParameterSetName = 'Process', Mandatory = $false)]
         [String]
         $WindowClass,
 
-        [Parameter(ParameterSetName='Process', Mandatory=$true, ValueFromPipeline=$true)]
+        [Parameter(ParameterSetName = 'Process', Mandatory = $true, ValueFromPipeline = $true)]
         [System.Diagnostics.Process[]]
         $InputObject,
 
-        [Parameter(ParameterSetName='Default', Mandatory=$false)]
+        [Parameter(ParameterSetName = 'Default', Mandatory = $false)]
         [Switch]
         $IncludeProcess,
 
-        [Parameter(ParameterSetName='Default', Mandatory=$false)]
-        [Parameter(ParameterSetName='Process', Mandatory=$false)]
+        [Parameter(ParameterSetName = 'Default', Mandatory = $false)]
+        [Parameter(ParameterSetName = 'Process', Mandatory = $false)]
         [Switch]
         $IncludeHidden,
 
-        [Parameter(ParameterSetName='Default', Mandatory=$false)]
-        [Parameter(ParameterSetName='Process', Mandatory=$false)]
+        [Parameter(ParameterSetName = 'Default', Mandatory = $false)]
+        [Parameter(ParameterSetName = 'Process', Mandatory = $false)]
         [Int[]]
-        $WindowHandle=@()
+        $WindowHandle = @()
     )
 
     Begin {
         #  Get-DelegateType is taken from https://github.com/PowerShellMafia
         #  Used to dynamically create a delegate function that is required by some defined Win32 methods (like User32 EnumWindows)
-        function Local:Get-DelegateType
-        {
+        function Local:Get-DelegateType {
             Param
             (
                 [OutputType([Type])]
@@ -69,29 +68,29 @@ Function Get-Window {
         #public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, System.Collections.ArrayList lParam);
         [String]$DllName = 'user32.dll'
         $PInvokeMethod = $TypeBuilder.DefinePInvokeMethod('EnumWindows',
-                                            $DllName,
-                                            [Reflection.MethodAttributes] 'Public, Static',
-                                            [Reflection.CallingConventions]::Standard,
-                                            #  Return type
-                                            [Bool],
-                                            # Argument types
-                                            [Type[]] @([MulticastDelegate], [System.Collections.ArrayList]),
-                                            [Runtime.InteropServices.CallingConvention]::Winapi,
-                                            [Runtime.InteropServices.CharSet]::Auto )
+            $DllName,
+            [Reflection.MethodAttributes] 'Public, Static',
+            [Reflection.CallingConventions]::Standard,
+            #  Return type
+            [Bool],
+            # Argument types
+            [Type[]] @([MulticastDelegate], [System.Collections.ArrayList]),
+            [Runtime.InteropServices.CallingConvention]::Winapi,
+            [Runtime.InteropServices.CharSet]::Auto )
         $PInvokeMethod.SetCustomAttribute((New-Object Reflection.Emit.CustomAttributeBuilder([Runtime.InteropServices.DllImportAttribute].GetConstructor(@([String])), @($DllName))))
 
         #[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         #public static extern int GetClassName(IntPtr hWnd, string lpClassName, int nMaxCount);
         $PInvokeMethod = $TypeBuilder.DefinePInvokeMethod('GetClassName',
-                                            $DllName,
-                                            [Reflection.MethodAttributes] 'Public, Static',
-                                            [Reflection.CallingConventions]::Standard,
-                                            #  Return type
-                                            [Int],
-                                            #  Argument types
-                                            [Type[]] @([IntPtr], [String], [Int]),
-                                            [Runtime.InteropServices.CallingConvention]::Winapi,
-                                            [Runtime.InteropServices.CharSet]::Auto )
+            $DllName,
+            [Reflection.MethodAttributes] 'Public, Static',
+            [Reflection.CallingConventions]::Standard,
+            #  Return type
+            [Int],
+            #  Argument types
+            [Type[]] @([IntPtr], [String], [Int]),
+            [Runtime.InteropServices.CallingConvention]::Winapi,
+            [Runtime.InteropServices.CharSet]::Auto )
         $PInvokeMethod.SetCustomAttribute((New-Object Reflection.Emit.CustomAttributeBuilder([Runtime.InteropServices.DllImportAttribute].GetConstructor(@([String])), @($DllName))))
 
         <#
@@ -115,7 +114,7 @@ Function Get-Window {
         #  Import ExternDll methods made available by .NET nativemethod.cs
         #  Available methods for import and definitions visible here:
         #  https://referencesource.microsoft.com/#system/compmod/microsoft/win32/nativemethods.cs
-        $mscorlib = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {$_.ManifestModule.Name -eq 'System.dll'}
+        $mscorlib = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.ManifestModule.Name -eq 'System.dll' }
         $NativeMethods = $mscorlib.GetType('Microsoft.Win32.NativeMethods')
         #  Expose methods as variables
         $GetWindowTextLength = $NativeMethods.GetMethod('GetWindowTextLength', ([Reflection.BindingFlags] 'Public, Static'))
@@ -129,7 +128,7 @@ Function Get-Window {
         if ($IncludeProcess) {
             $P = @(Get-Process)
         }
-        $P | ForEach-Object {$Processes["$($_.Id)"] = $_}
+        $P | ForEach-Object { $Processes["$($_.Id)"] = $_ }
 
         Write-Verbose "There are $($Processes.Count) processes"
 
@@ -157,7 +156,7 @@ Function Get-Window {
         [System.Collections.ArrayList]$hWnds = @()
         $null = $User32::EnumWindows($EnumWindowsProcFunction, $hWnds)
         if ($WindowHandle -and $WindowHandle.Count -gt 0) {
-            $hWnds = @($hWnds | Where-Object {$_ -in $WindowHandle})
+            $hWnds = @($hWnds | Where-Object { $_ -in $WindowHandle })
         }
         if ($hWnds.Count -eq 0) {
             return
@@ -197,7 +196,8 @@ Function Get-Window {
                 $GWTIParam = @($HandleRef, $null)
                 $ThreadID = $GetWindowThreadProcessId.Invoke($null, $GWTIParam)
                 $ProcID = $GWTIParam[1]
-            } catch {
+            }
+            catch {
                 Write-Error $Error[0].Exception
             }
 
@@ -206,26 +206,26 @@ Function Get-Window {
             }
 
             $Window = New-Object -TypeName psobject -Property @{
-                        WindowHandle = $hWnd;
-                        WindowClass = $ClassName;
-                        WindowTitle = $WindowText;
-                        ThreadID = $ThreadID;
-                        ProcessID = $ProcID;
-                        Process = $null;
-                        Visible = $Visible
-                    }
+                WindowHandle = $hWnd;
+                WindowClass  = $ClassName;
+                WindowTitle  = $WindowText;
+                ThreadID     = $ThreadID;
+                ProcessID    = $ProcID;
+                Process      = $null;
+                Visible      = $Visible
+            }
             $null = $Windows.Add($Window)
         }
 
         Write-Verbose "There are $($Windows.Count) unfiltered window handles"
 
-        $FilteredWindows = @($Windows | Where-Object {$true})
+        $FilteredWindows = @($Windows | Where-Object { $true })
 
         if ($WindowClass) {
-            $FilteredWindows = $FilteredWindows | Where-Object {$_.WindowClass -like $WindowClass}
+            $FilteredWindows = $FilteredWindows | Where-Object { $_.WindowClass -like $WindowClass }
         }
         if ($WindowTitle) {
-            $FilteredWindows = $FilteredWindows | Where-Object {$_.WindowTitle -like $WindowTitle}
+            $FilteredWindows = $FilteredWindows | Where-Object { $_.WindowTitle -like $WindowTitle }
         }
 
         Write-Verbose "There are $($FilteredWindows.Count) filtered window handles"
@@ -233,7 +233,7 @@ Function Get-Window {
 
     Process {
         if ($InputObject) {
-            $InputObject | ForEach-Object {$Processes["$($_.Id)"] = $_}
+            $InputObject | ForEach-Object { $Processes["$($_.Id)"] = $_ }
         }
     }
 
@@ -246,7 +246,7 @@ Function Get-Window {
             }
 
             if (!$IncludeProcess) {
-                $FilteredWindows = @($FilteredWindows | Where-Object {$null -ne $_.Process})
+                $FilteredWindows = @($FilteredWindows | Where-Object { $null -ne $_.Process })
             }
         }
 

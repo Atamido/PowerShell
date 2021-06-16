@@ -1,23 +1,23 @@
 Function Show-Window {
     Param(
-        [Parameter(Mandatory=$true,
-                   ValueFromPipeline=$true,
-                   ParameterSetName='GetWindow')]
-        [ValidateScript({[bool]($_ | Get-Member -Name 'WindowHandle')})]
+        [Parameter(Mandatory = $true,
+            ValueFromPipeline = $true,
+            ParameterSetName = 'GetWindow')]
+        [ValidateScript( { [bool]($_ | Get-Member -Name 'WindowHandle') })]
         [PSCustomObject[]]
         $WindowObjects,
 
-        [Parameter(Mandatory=$true,
-                   ValueFromPipeline=$true,
-                   ValueFromPipelineByPropertyName=$true,
-                   ParameterSetName='Default')]
+        [Parameter(Mandatory = $true,
+            ValueFromPipeline = $true,
+            ValueFromPipelineByPropertyName = $true,
+            ParameterSetName = 'Default')]
         [Int[]]
         $WindowHandle,
 
-        [Parameter(Mandatory=$true,
-                   ParameterSetName='Default')]
-        [Parameter(Mandatory=$true,
-                   ParameterSetName='GetWindow')]
+        [Parameter(Mandatory = $true,
+            ParameterSetName = 'Default')]
+        [Parameter(Mandatory = $true,
+            ParameterSetName = 'GetWindow')]
         [ValidateSet('Hide', 'ShowNormal', 'ShowMinimized', 'ShowMaximized', 'ShowNoActivate', 'Show', 'Minimize', 'ShowMinNoActive', 'ShowNA', 'Restore', 'ShowDefault', 'ForceMinimize')]
         [String]
         $WindowAction
@@ -43,15 +43,15 @@ Function Show-Window {
         #public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [String]$DllName = 'user32.dll'
         $PInvokeMethod = $TypeBuilder.DefinePInvokeMethod('ShowWindow',
-                                            $DllName,
-                                            [Reflection.MethodAttributes] 'Public, Static',
-                                            [Reflection.CallingConventions]::Standard,
-                                            #  Return type
-                                            [Bool],
-                                            # Argument types
-                                            [Type[]] @([IntPtr], [Int]),
-                                            [Runtime.InteropServices.CallingConvention]::Winapi,
-                                            [Runtime.InteropServices.CharSet]::Auto )
+            $DllName,
+            [Reflection.MethodAttributes] 'Public, Static',
+            [Reflection.CallingConventions]::Standard,
+            #  Return type
+            [Bool],
+            # Argument types
+            [Type[]] @([IntPtr], [Int]),
+            [Runtime.InteropServices.CallingConvention]::Winapi,
+            [Runtime.InteropServices.CharSet]::Auto )
         $PInvokeMethod.SetCustomAttribute((New-Object Reflection.Emit.CustomAttributeBuilder([Runtime.InteropServices.DllImportAttribute].GetConstructor(@([String])), @($DllName))))
 
         $User32 = $TypeBuilder.CreateType()
@@ -61,11 +61,12 @@ Function Show-Window {
         if ($WindowHandle.Count -gt 0) {
             foreach ($hWnd in $WindowHandle) {
                 New-Object -TypeName psobject -Property @{
-                            WindowHandle = $hWnd;
-                            ShowWindowResult = $User32::ShowWindow($hWnd, $nCmdShow)
-                        } | Write-Output
+                    WindowHandle     = $hWnd;
+                    ShowWindowResult = $User32::ShowWindow($hWnd, $nCmdShow)
+                } | Write-Output
             }
-        } else {
+        }
+        else {
             foreach ($Window in $WindowObjects) {
                 $hWnd = $Window.WindowHandle
                 $Window | Add-Member -MemberType NoteProperty -Name ShowWindowResult -Value ($User32::ShowWindow($hWnd, $nCmdShow)) -PassThru | Write-Output
