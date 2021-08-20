@@ -32,16 +32,26 @@ function Convert-RegToPSObject {
         $IncludeType,
 
         # Shorten the key name from 'HKEY_LOCAL_MACHINE\' to 'HKLM:\'
+        # Change output properties from 'Name'='example','Value'='data' to 'example'='data'
         [Parameter(Mandatory = $false, ParameterSetName = 'Default')]
         [Switch]
-        $Shorten
+        $Compress,
+
+        # Include sub-keys
+        [Parameter(Mandatory = $false, ParameterSetName = 'Default')]
+        [Switch]
+        $Recurse
     )
 
     Begin {
         [String]$KeyPath = ''
         [String]$KeyName = ''
+        [String]$KeyPropName = ''
+        [String]$KeyPropType = ''
+        [String[]]$PropNames = @()
         $RegRoots = @{}
         Get-PSDrive -PSProvider 'Registry' | ForEach-Object { $RegRoots[$_.Root] = $_.Name }
+        $Keys = [System.Collections.Generic.List[PSCustomObject]]::new()
     }
     Process {
         if ($Name) {
@@ -56,28 +66,68 @@ function Convert-RegToPSObject {
                 $KeyPath = "Registry::$($Path)"
             }
             if (Test-Path -LiteralPath $KeyPath) {
-                $Key = Get-Item -LiteralPath $KeyPath
-                $Properties = [System.Collections.Generic.List[PSCustomObject]]::new()
-                foreach ($PropName in $Key.GetValueNames()) {
-                    if ($IncludeType) {
-                        $Property = [PSCustomObject]@{'Name' = $PropName; 'Type' = $Key.GetValueKind($Name); 'Value' = $Key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+                $Keys.Clear()
+                $Keys.Add((Get-Item -LiteralPath $KeyPath))
+                if ($Recurse) {
+                    Get-ChildItem -LiteralPath $KeyPath -Recurse | ForEach-Object { $Keys.Add($_) }
+                }
+                foreach ($Key in $Keys) {
+                    if ($Compress -and -not $IncludeType) {
+                        $Properties = [PSCustomObject]@{}
                     }
                     else {
-                        $Property = [PSCustomObject]@{'Name' = $PropName; 'Value' = $Key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+                        $Properties = [System.Collections.Generic.List[PSCustomObject]]::new()
                     }
-                    $Properties.Add($Property)
-                }
+                    $PropNames = $Key.GetValueNames() | Sort-Object
+                    foreach ($PropName in $PropNames) {
+                        #  The default registry value name comes back as blank, but if you want to set it you have to specify '(Default)'
+                        if ($PropName -eq '') {
+                            $KeyPropName = '(Default)'
+                        }
+                        else {
+                            $KeyPropName = $PropName
+                        }
+                        $KeyPropValue = $Key.GetValue($PropName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 
-                if ($IncludeEmpty -or $Properties.Count -gt 0) {
-                    $KeyName = $Key.Name
-                    if ($Shorten) {
-                        #  Shorten key name to use PSDrive where possible
-                        $Store = $Key.Name -replace '^([^:\\]+)(.*)', '$1'
-                        if ($RegRoots.ContainsKey($Store)) {
-                            $KeyName = "$($RegRoots[$Store]):$($Key.Name -replace '^([^:\\]+)(.*)', '$2')"
+                        if ($IncludeType) {
+                            $KeyPropType = $Key.GetValueKind($PropName).ToString();
+                            if ($Compress) {
+                                $Property = [PSCustomObject]@{"$KeyPropName" = $KeyPropValue; 'Type' = $KeyPropType }
+                                $Properties.Add($Property)
+                            }
+                            else {
+                                $Property = [PSCustomObject]@{'Name' = $KeyPropName; 'Value' = $KeyPropValue; 'Type' = $KeyPropType }
+                                $Properties.Add($Property)
+                            }
+                        }
+                        else {
+                            if ($Compress) {
+                                Add-Member -InputObject $Properties -MemberType NoteProperty -Name $KeyPropName -Value $KeyPropValue
+                            }
+                            else {
+                                $Property = [PSCustomObject]@{'Name' = $KeyPropName; 'Value' = $KeyPropValue }
+                                $Properties.Add($Property)
+                            }
+                        }
+
+                    }
+
+                    if ($IncludeEmpty -or $PropNames.Count -gt 0) {
+                        $KeyName = $Key.Name
+                        if ($Compress) {
+                            #  Shorten key name to use PSDrive where possible
+                            $Store = $Key.Name -replace '^([^:\\]+)(.*)', '$1'
+                            if ($RegRoots.ContainsKey($Store)) {
+                                $KeyName = "$($RegRoots[$Store]):$($Key.Name -replace '^([^:\\]+)(.*)', '$2')"
+                            }
+                        }
+                        if ($Compress -and $PropNames.Count -eq 0) {
+                            [PSCustomObject]@{'Key' = $KeyName } | Write-Output
+                        }
+                        else {
+                            [PSCustomObject]@{'Key' = $KeyName; 'Props' = $Properties } | Write-Output
                         }
                     }
-                    [PSCustomObject]@{'Key' = $KeyName; 'Props' = $Properties } | Write-Output
                 }
             }
         }
