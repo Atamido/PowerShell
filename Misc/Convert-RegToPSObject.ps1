@@ -1,4 +1,3 @@
-
 function Convert-RegToPSObject {
     [CmdletBinding(DefaultParameterSetName = 'Default',
         PositionalBinding = $false)]
@@ -136,3 +135,21 @@ function Convert-RegToPSObject {
     }
 }
 
+<#
+[String[]]$Keys = @(
+    'HKU:\S-1-5-20\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization'
+)
+
+#  This is only needed if using a user registry hive
+if (!(Test-Path -LiteralPath 'HKU:\')) {
+    $null = New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS
+}
+
+$RegObs = Convert-RegToPSObject -LiteralPath $Keys -Recurse -Compress
+#  Don't care about the usage key
+$RegObs = $RegObs | Where-Object {$_.Key -notlike  '*Usage'}
+#  Shorten the key name so they don't take as much space
+$RegObs | ForEach-Object {$_.Key = $_.Key.Replace('HKU:\S-1-5-20\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization', '')}
+
+$RegObs | ConvertTo-Json -Compress | Write-Output
+#>
