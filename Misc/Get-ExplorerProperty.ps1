@@ -1,5 +1,5 @@
 function Get-ExplorerProperty {
-<#
+    <#
 .SYNOPSIS
 Get the Windows Explorer properties for files and folders
 
@@ -47,18 +47,18 @@ Stop excluding these properties.  These properties are excluded by default as th
 PS C:\> Get-ChildItem $Env:USERPROFILE\Pictures -Recurse | Get-ExplorerProperty | Format-List Name,ExplorerProperties,ExplorerPropertiesHash
 
 Name                   : Saved Pictures
-ExplorerProperties     : @{Rating=Unrated; Shared=No; Attributes=RD; Sharing status=Private; Perceived type=Image; 
+ExplorerProperties     : @{Rating=Unrated; Shared=No; Attributes=RD; Sharing status=Private; Perceived type=Image;
                          Owner=Contoso\atamido; Link status=Unresolved}
 ExplorerPropertiesHash : {Rating, Shared, Attributes, Sharing status...}
 
 Name                   : IMG_0035.JPG
-ExplorerProperties     : @{Height=‎2448 pixels; Sharing status=Private; Metering mode=Pattern; File extension=.JPG; EXIF 
-                         version=0221; Dimensions=‪3264 x 2448‬; Camera maker=Apple; Width=‎3264 pixels; Program name=9.2; 
-                         Size=1.55 MB; ISO speed=ISO-320; Flash mode=No flash, auto; Shared=No; Exposure time=‎1/15 sec.; Vertical 
-                         resolution=‎72 dpi; Exposure program=Normal; Attributes=A; Owner=Contoso\atamido; Link 
-                         status=Unresolved; Horizontal resolution=‎72 dpi; Date taken=‎1/‎1/‎2016 ‏‎10:28 PM; Program mode=Normal 
-                         program; Bit depth=24; White balance=Auto; 35mm focal length=29; F-stop=f/2.2; Rating=Unrated; 
-                         Orientation=Normal; Camera model=iPhone 6; Exposure bias=‎0 step; Perceived type=Image; Focal length=‎4 
+ExplorerProperties     : @{Height=2448 pixels; Sharing status=Private; Metering mode=Pattern; File extension=.JPG; EXIF
+                         version=0221; Dimensions=3264 x 2448; Camera maker=Apple; Width=3264 pixels; Program name=9.2;
+                         Size=1.55 MB; ISO speed=ISO-320; Flash mode=No flash, auto; Shared=No; Exposure time=1/15 sec.; Vertical
+                         resolution=72 dpi; Exposure program=Normal; Attributes=A; Owner=Contoso\atamido; Link
+                         status=Unresolved; Horizontal resolution=72 dpi; Date taken=1/1/2016 10:28 PM; Program mode=Normal
+                         program; Bit depth=24; White balance=Auto; 35mm focal length=29; F-stop=f/2.2; Rating=Unrated;
+                         Orientation=Normal; Camera model=iPhone 6; Exposure bias=0 step; Perceived type=Image; Focal length=4
                          mm}
 ExplorerPropertiesHash : {Height, Sharing status, Metering mode, File extension...}
 
@@ -82,9 +82,9 @@ Written by Atamido
         [String[]]$ExcludeProperties = @(),
         [parameter()]
         [Switch]$IncludeAllProperties,
-        [parameter(ValueFromPipeline=$True,ParameterSetName='Items',Position=0)]
+        [parameter(ValueFromPipeline = $True, ParameterSetName = 'Items', Position = 0)]
         [System.IO.FileSystemInfo[]]$FileSystemItems = @(),
-        [parameter(ValueFromPipeline=$True,ParameterSetName='LiteralPath',Position=0)]
+        [parameter(ValueFromPipeline = $True, ParameterSetName = 'LiteralPath', Position = 0)]
         [String[]]$LiteralPath = @()
     )
 
@@ -100,7 +100,7 @@ Written by Atamido
         }
 
         if (-not ($IncludeAllProperties)) {
-            $ExcludeProperties += @('Computer','Date accessed','Date created','Date modified','Filename','Folder','Folder name','Folder path','Item type','Kind','Name','Path','Space free','Space used','Total size','Type')
+            $ExcludeProperties += @('Computer', 'Date accessed', 'Date created', 'Date modified', 'Filename', 'Folder', 'Folder name', 'Folder path', 'Item type', 'Kind', 'Name', 'Path', 'Space free', 'Space used', 'Total size', 'Type')
         }
 
         #  If LiteralPath was used, then convert the strings to FileSystemInfo objects
@@ -108,45 +108,51 @@ Written by Atamido
         if ($LiteralPath.Count -gt 0) {
             Write-Verbose "LiteralPath $($LiteralPath.Count)"
             [System.IO.FileSystemInfo[]]$FileSystemItems = @()
-            $FileSystemItems = $LiteralPath | %{
-                    if (Test-Path -LiteralPath ($_.Trim())){
-                        $Item = Get-Item -LiteralPath ($_.Trim())
-                        if ($Item.PSProvider.ToString() -eq 'Microsoft.PowerShell.Core\FileSystem') {
-                            $Item
-                        } else {
-                            Write-Warning "This cmdlet only takes file system paths.  This path is a $($Item.PSProvider.ToString())"
-                        }
-                    } else {
-                        Write-Warning "Invalid path: '$($_)'"
+            $FileSystemItems = $LiteralPath | % {
+                if (Test-Path -LiteralPath ($_.Trim())) {
+                    $Item = Get-Item -LiteralPath ($_.Trim())
+                    if ($Item.PSProvider.ToString() -eq 'Microsoft.PowerShell.Core\FileSystem') {
+                        $Item
+                    }
+                    else {
+                        Write-Warning "This cmdlet only takes file system paths.  This path is a $($Item.PSProvider.ToString())"
                     }
                 }
-        } else {
+                else {
+                    Write-Warning "Invalid path: '$($_)'"
+                }
+            }
+        }
+        else {
             Write-Verbose "FileSystemItems $($FileSystemItems.Count)"
-            $FileSystemItems = $FileSystemItems | %{
-                    if (Test-Path -LiteralPath ($_.FullName)){
-                        $_
-                    } else {
-                        Write-Warning "Invalid path: '$($_.FullName)'"
-                    }
+            $FileSystemItems = $FileSystemItems | % {
+                if (Test-Path -LiteralPath ($_.FullName)) {
+                    $_
                 }
+                else {
+                    Write-Warning "Invalid path: '$($_.FullName)'"
+                }
+            }
         }
 
         foreach ($Item in $FileSystemItems) {
-            #  Determine the parent path.  
+            #  Determine the parent path.
             #  This is needed because the Shell COM object needs the parent path
             #  In addition, this method can't be used to retrieve attributes on root paths
             if ($Item.FullName -eq $Item.Root) {
                 Write-Warning "Unable to retrieve properties for root path: '$($Item.FullName)'"
                 continue
-            } elseif ($Item.PSIsContainer) {
+            }
+            elseif ($Item.PSIsContainer) {
                 $ParentPath = Split-Path -LiteralPath $Item.FullName
-            } else {
+            }
+            else {
                 $ParentPath = $Item.DirectoryName
             }
 
             Write-Verbose "Processing $($Item.FullName)"
             Write-Verbose "With parent path: '$ParentPath'"
-            
+
             $ShellNamespace = $ShellApplication.NameSpace($ParentPath)
 
             #  The available attributes varies by folder, so each new parent folder needs to be queried to find available attributes
@@ -157,10 +163,11 @@ Written by Atamido
                 $Attributes = @{}
 
                 for ($i = -1; $i -lt 1024; $i++) {
-                    $PropName = $ShellNamespace.GetDetailsOf($null,$i)
+                    $PropName = $ShellNamespace.GetDetailsOf($null, $i)
                     if (-not $LimitProperties -and -not ([String]::IsNullOrWhiteSpace($PropName)) -and $ExcludeProperties -notcontains $PropName) {
                         $Attributes[$PropName] = $i
-                    } elseif ($LimitProperties -and -not ([String]::IsNullOrWhiteSpace($PropName)) -and $Properties -contains $PropName) {
+                    }
+                    elseif ($LimitProperties -and -not ([String]::IsNullOrWhiteSpace($PropName)) -and $Properties -contains $PropName) {
                         $Attributes[$PropName] = $i
                     }
                 }
@@ -169,7 +176,8 @@ Written by Atamido
                 #Write-Verbose $Attributes
                 $Parent['Attributes'] = $Attributes
                 $Parents[$ParentPath] = $Parent
-            } else {
+            }
+            else {
                 $Parent = $Parents[$ParentPath]
                 $Attributes = $Parent['Attributes']
             }
@@ -183,11 +191,11 @@ Written by Atamido
                     $ExplorerProperties[$Attribute.Key] = $AttributeValue
                 }
             }
-            
+
             Write-Verbose "Discovered $($ExplorerProperties.Count) attributes for item '$($Item.FullName)'"
             #Write-Verbose $ExplorerProperties
             $ExplorerPropertiesObj = New-Object -TypeName psobject -Property $ExplorerProperties
-            Add-Member -InputObject $Item -NotePropertyMembers @{'ExplorerProperties' = $ExplorerPropertiesObj; 'ExplorerPropertiesHash' = $ExplorerProperties} -PassThru
+            Add-Member -InputObject $Item -NotePropertyMembers @{'ExplorerProperties' = $ExplorerPropertiesObj; 'ExplorerPropertiesHash' = $ExplorerProperties } -PassThru
         }
     }
 
