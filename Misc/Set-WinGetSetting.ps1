@@ -164,7 +164,7 @@ function Set-WinGetSetting {
         $zipInstall,
 
         [Parameter(
-            HelpMessage = 'Used to override the logging setting and create a verbose log.'
+            HelpMessage = 'Enable installing packages from local manifest files.  Required running with Admin rights'
         )]
         [Bool]
         $LocalManifestFiles,
